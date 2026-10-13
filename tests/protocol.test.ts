@@ -1,0 +1,348 @@
+import { describe, expect, it } from "vitest";
+import {
+  MAX_MESSAGE_BYTES, NEUTRAL_CONTROLS, isAiming, isCameraAim, isCentered, isControls, isCounter, isEngineStatus,
+  isControlTrace, isHapticFeedback, isProtocolVersionMismatch, neutralize, parseMessage,
+  type AircraftStatus, type ControlSurfaceState, type RemoteMessage,
+} from "../src/protocol";
+
+const controls: ControlSurfaceState = {
+  elevator: -0.3, aileron: 0.4, rudder: -0.5, throttle: 0.83, pitchTrim: 0.2, rollTrim: -0.1, flaps: 1 / 3, brake: 0,
+};
+const status: AircraftStatus = {
+  owner: "local", paused: false, viewMode: "third", controls, airspeedKts: 110, altitudeFt: 4321, headingDeg: 231,
+};
+const envelope = { v: 1 as const, session: "flight-session", epoch: 3 };
+const frame = { ...envelope, type: "controls" as const, seq: 123, lease: 4, controls };
+const accepted: RemoteMessage[] = [
+  { v: 1, type: "hello", secret: "a".repeat(43) },
+  { v: 1, type: "reject", reason: "Reload both devices." },
+  { ...envelope, type: "welcome", streamId: 1, status },
+  { ...envelope, type: "ready" },
+  { ...envelope, type: "status", status, message: "Phone paired · Desktop controls" },
+  { ...envelope, type: "handoff", controls: neutralize(controls), lease: 5, requestId: 6 },
+  { ...envelope, type: "handoffAck", requestId: 6 },
+  { ...envelope, type: "granted", requestId: 6, status: { ...status, owner: "phone" } },
+  { ...envelope, type: "granted", requestId: 7, status: { ...status, owner: "phone", paused: true }, resume: true },
+  { ...envelope, type: "status", status: { ...status, handBack: "now" }, message: "Desktop hidden · Simulation paused" },
+  { ...envelope, type: "heartbeat", lease: 13, status: { ...status, handBack: "idle" } },
+  { ...envelope, type: "heartbeat", lease: 14, status: { ...status, owner: "phone", blend: "computer" } },
+  { ...envelope, type: "action", id: 1, lease: 2, action: "requestControl" },
+  { ...envelope, type: "action", id: 2, lease: 3, action: "releaseControl" },
+  { ...envelope, type: "action", id: 3, lease: 3, action: "setPaused", value: true },
+  { ...envelope, type: "action", id: 4, lease: 3, action: "setPaused", value: false },
+  { ...envelope, type: "action", id: 5, lease: 3, action: "setViewMode", value: "first" },
+  { ...envelope, type: "action", id: 6, lease: 3, action: "setViewMode", value: "third" },
+  { ...envelope, type: "action", id: 7, lease: 3, action: "shutdownEngine" },
+  { ...envelope, type: "ack", id: 2, ok: false, message: "Center controls to take over.", status },
+  frame,
+  { ...frame, seq: 124, camera: { yaw: -1, pitch: 0.25 } },
+  { ...frame, seq: 125, camera: { yaw: 0, pitch: 0, zoom: 1.5 } },
+  { ...frame, seq: 126, camera: { yaw: 0.012, pitch: 0 },
+    trace: { at: 1234.5, by: 0, gated: 1, buf: 0, cam: [[1230.1, 1231.2, 12, 0, 2]], ctl: [[1229.9, 1230.4]], drop: [0, 0, 0] } },
+  { ...frame, seq: 127, starter: 1 },
+  { ...envelope, type: "heartbeat", lease: 9,
+    status: { ...status, engine: { phase: "RUNNING", n1: 72.4, n2: 88.1, thrustLbf: 1180, fuelFlowPph: 412 } } },
+  { ...envelope, type: "heartbeat", lease: 10, status: { ...status, engine: { phase: "OFF" } } },
+  { ...envelope, type: "heartbeat", lease: 12,
+    status: { ...status, engine: { phase: "MOTORING", n2: 12.5, state: "starting", start: 0.21, blocked: "No fuel on board" } } },
+  { ...envelope, type: "heartbeat", lease: 7 },
+  { ...envelope, type: "heartbeat", lease: 11, trace: 1 },
+  { ...envelope, type: "heartbeat", lease: 8, status, appliedSeq: 123, receiveToApplyMs: 3.1 },
+  { ...envelope, type: "ping", id: 8, sentAt: 1432.45 },
+  { ...envelope, type: "pong", id: 8, sentAt: 1432.45 },
+];
+
+describe("phone protocol parsing", () => {
+  it("accepts an optional six-digit aircraft afterburner accent and rejects arbitrary colors", () => {
+    for (const afterburnerColor of [undefined, "#ff9450", "#A0B1C2"]) {
+      expect(isEngineStatus({ phase: "RUNNING", afterburnerColor })).toBe(true);
+    }
+    for (const afterburnerColor of [null, 1, "orange", "#f90", "ff9450", "#ff945000", "#gg9450", "#ff9450;"]) {
+      expect(isEngineStatus({ phase: "RUNNING", afterburnerColor })).toBe(false);
+    }
+  });
+
+  it("validates per-row blade counts without requiring them from older hosts", () => {
+    const rotorBlades = { outer: 28, inner: 40, outerEstimated: false, innerEstimated: true };
+    expect(isEngineStatus({ phase: "RUNNING", rotorBlades })).toBe(true);
+    expect(isEngineStatus({ phase: "RUNNING", rotorBlades: { ...rotorBlades, outer: 2, inner: null } })).toBe(true);
+    expect(isEngineStatus({ phase: "RUNNING" })).toBe(true);
+    for (const invalid of [null, [], {}, { ...rotorBlades, outer: 0 }, { ...rotorBlades, outer: 129 },
+      { ...rotorBlades, outer: 1.5 }, { ...rotorBlades, outer: "28" }, { ...rotorBlades, inner: 0 },
+      { ...rotorBlades, inner: 129 }, { ...rotorBlades, inner: NaN }, { ...rotorBlades, inner: 4.1 },
+      { ...rotorBlades, inner: undefined }, { ...rotorBlades, outerEstimated: 1 }, { ...rotorBlades, innerEstimated: "yes" }]) {
+      expect(isEngineStatus({ phase: "RUNNING", rotorBlades: invalid }), JSON.stringify(invalid)).toBe(false);
+    }
+    expect(isEngineStatus({ phase: "RUNNING", rotorBlades: { ...rotorBlades, outer: 1, inner: 128 } })).toBe(true);
+  });
+
+  it("carries explicit engine type, native limits, simulation time and bounded orb budgets", () => {
+    const orbs = { fps: 30, turnsPerSecond: 2, pixelRatio: 2, renderer: "auto" };
+    expect(isEngineStatus({ phase: "RUNNING", kind: "piston", simTimeS: 12.125, rpm: 1350, maxRpm: 2700, orbs })).toBe(true);
+    for (const fps of [60, 120, 144, 240, 1000]) {
+      expect(isEngineStatus({ phase: "RUNNING", orbs: { ...orbs, fps } })).toBe(true);
+    }
+    for (const maxPatternStep of [0.05, 0.45, 0.49]) {
+      expect(isEngineStatus({ phase: "RUNNING", orbs: { ...orbs, maxPatternStep } })).toBe(true);
+    }
+    for (const maxPatternStep of [0, 0.049, 0.5, NaN, Infinity, null, "0.45"]) {
+      expect(isEngineStatus({ phase: "RUNNING", orbs: { ...orbs, maxPatternStep } })).toBe(false);
+    }
+    expect(isEngineStatus({ phase: "RUNNING", kind: "turbine", maxN1: 100, maxN2: 110 })).toBe(true);
+    for (const invalid of [{ kind: "jet" }, { simTimeS: -1 }, { simTimeS: Infinity }, { maxN1: 0 },
+      { maxN2: -100 }, { maxRpm: NaN }, { orbs: { ...orbs, fps: 1001 } },
+      { orbs: { ...orbs, turnsPerSecond: 4.1 } }, { orbs: { ...orbs, pixelRatio: 0.5 } },
+      { orbs: { ...orbs, renderer: "canvas2d" } }]) {
+      expect(isEngineStatus({ phase: "RUNNING", ...invalid })).toBe(false);
+    }
+  });
+
+  it.each(accepted)("accepts $type as JSON or decoded PeerJS data", (message) => {
+    expect(parseMessage(message)).toEqual(message);
+    expect(parseMessage(JSON.stringify(message))).toEqual(message);
+  });
+
+  it("rejects malformed JSON, primitives, arrays, unsupported versions, and unknown message types", () => {
+    for (const input of ["{", "null", "[]", "123", "true", "", null, undefined, 123, false, [],
+      { ...frame, v: 2 }, { ...frame, v: "1" }, { ...frame, type: "invented" }, { type: "ready" },
+      { ...frame, session: "" }, { ...frame, session: "a".repeat(129) }]) {
+      expect(parseMessage(input), JSON.stringify(input)).toBeNull();
+    }
+  });
+
+  it("rejects missing controls, every invalid range, nonfinite values, and nonnumeric values", () => {
+    for (const key of Object.keys(controls)) {
+      const signed = ["elevator", "aileron", "rudder", "pitchTrim", "rollTrim"].includes(key);
+      for (const invalid of [1.001, signed ? -1.001 : -0.001, NaN, Infinity, -Infinity, "0", null, undefined]) {
+        const value = { ...controls, [key]: invalid };
+        expect(isControls(value), `${key}: ${String(invalid)}`).toBe(false);
+        expect(parseMessage({ ...frame, controls: value })).toBeNull();
+      }
+      expect(isControls({ ...controls, [key]: signed ? -1 : 0 })).toBe(true);
+      expect(isControls({ ...controls, [key]: 1 })).toBe(true);
+    }
+    expect(parseMessage({ ...frame, controls: undefined })).toBeNull();
+    expect(parseMessage({ ...frame, controls: [] })).toBeNull();
+  });
+
+  it("rejects fractional, negative, nonnumeric, and unsafe counters on all counter-bearing messages", () => {
+    for (const message of accepted) {
+      for (const key of ["epoch", "streamId", "seq", "lease", "requestId", "id", "appliedSeq"] as const) {
+        if (!(key in message)) continue;
+        for (const invalid of [-1, 0.5, Number.MAX_SAFE_INTEGER + 1, Infinity, NaN, "0", null]) {
+          expect(parseMessage({ ...message, [key]: invalid }), `${message.type}.${key}: ${String(invalid)}`).toBeNull();
+        }
+        expect(parseMessage({ ...message, [key]: 0 })).not.toBeNull();
+      }
+    }
+  });
+
+  it("validates SCTP stream IDs, telemetry, action values, and pairing secrets", () => {
+    const action = { ...envelope, type: "action", id: 1, lease: 2 };
+    const invalid = [
+      { v: 1, type: "hello", secret: "a".repeat(42) },
+      { v: 1, type: "hello", secret: "a".repeat(44) },
+      { v: 1, type: "hello", secret: `${"a".repeat(42)}+` },
+      { v: 1, type: "reject", reason: "" },
+      { v: 1, type: "reject", reason: "a".repeat(257) },
+      { ...envelope, type: "welcome", streamId: 65535, status },
+      { ...envelope, type: "status", status, message: "" },
+      { ...envelope, type: "ack", status, message: "Applied", id: 1, ok: 1 },
+      { ...envelope, type: "heartbeat", lease: 0, receiveToApplyMs: -1 },
+      { ...envelope, type: "heartbeat", lease: 0, receiveToApplyMs: Infinity },
+      { ...envelope, type: "ping", id: 0, sentAt: -1 },
+      { ...envelope, type: "pong", id: 0, sentAt: Infinity },
+      { ...action, action: "requestControl", value: true },
+      { ...action, action: "releaseControl", value: false },
+      { ...action, action: "setPaused" },
+      { ...action, action: "setPaused", value: "false" },
+      { ...action, action: "setViewMode", value: "cockpit" },
+      { ...action, action: "setViewMode", value: true },
+      { ...action, action: "reset" },
+      { ...action, action: "shutdownEngine", value: true },
+    ];
+    for (const value of invalid) expect(parseMessage(value), JSON.stringify(value)).toBeNull();
+    expect(parseMessage({ ...envelope, type: "welcome", streamId: 65534, status })).not.toBeNull();
+    for (const [key, value] of Object.entries({
+      owner: "spectator", paused: "false", viewMode: "cockpit", controls: null,
+      airspeedKts: Infinity, altitudeFt: "4321", headingDeg: NaN,
+    })) {
+      expect(parseMessage({ ...envelope, type: "heartbeat", lease: 0, status: { ...status, [key]: value } })).toBeNull();
+    }
+  });
+
+  it("drops a malformed trace on its own: measurement never costs a frame its controls or a heartbeat its lease", () => {
+    const trace = { at: 1, by: 1, gated: 0, buf: 0, cam: [], ctl: [], drop: [0, 0, 0] };
+    expect(isControlTrace(trace)).toBe(true);
+    for (const bad of [null, [], { ...trace, by: 3 }, { ...trace, at: NaN }, { ...trace, gated: -1 }, { ...trace, buf: -1 },
+      { ...trace, cam: [[1, 2, 3, 4]] }, { ...trace, ctl: [[1, "2"]] }, { ...trace, drop: [0, 0] },
+      { ...trace, cam: Array.from({ length: 9 }, () => [1, 2, 3, 4, 5]) }]) {
+      expect(isControlTrace(bad), JSON.stringify(bad)).toBe(false);
+      expect(parseMessage({ ...frame, trace: bad })).toEqual(frame);
+    }
+    const heartbeat = { ...envelope, type: "heartbeat", lease: 7 };
+    for (const bad of [true, 2, "1", {}]) expect(parseMessage({ ...heartbeat, trace: bad })).toEqual(heartbeat);
+  });
+
+  it("drops a malformed camera aim without costing the frame its control surfaces", () => {
+    for (const camera of [{ yaw: 1.001, pitch: 0 }, { yaw: 0, pitch: -1.001 }, { yaw: NaN, pitch: 0 },
+      { yaw: 0, pitch: Infinity }, { yaw: "0", pitch: 0 }, { yaw: 0 }, { pitch: 0 }, [0, 0], null, 1,
+      // A pinch cannot more than double or halve the view in a single frame.
+      { yaw: 0, pitch: 0, zoom: 0.49 }, { yaw: 0, pitch: 0, zoom: 2.01 },
+      { yaw: 0, pitch: 0, zoom: 0 }, { yaw: 0, pitch: 0, zoom: -1 }, { yaw: 0, pitch: 0, zoom: NaN }]) {
+      expect(isCameraAim(camera), JSON.stringify(camera)).toBe(false);
+      // The aim is a view, not a surface: the frame still flies the aircraft.
+      expect(parseMessage({ ...frame, camera })).toEqual(frame);
+    }
+    expect(isCameraAim({ yaw: -1, pitch: 1 })).toBe(true);
+    expect(isCameraAim({ yaw: 0, pitch: 0, zoom: 0.5 })).toBe(true);
+    expect(isAiming({ yaw: 0, pitch: 0 })).toBe(false);
+    expect(isAiming({ yaw: 0, pitch: 0, zoom: 1 })).toBe(false);
+    expect(isAiming(undefined)).toBe(false);
+    expect(isAiming({ yaw: 0, pitch: -0.01 })).toBe(true);
+    expect(isAiming({ yaw: 0, pitch: 0, zoom: 1.01 })).toBe(true);
+  });
+
+  it("rejects a status whose engine reading is malformed, and accepts one with values absent", () => {
+    for (const engine of [{ phase: "" }, { phase: "running" }, { phase: "A".repeat(17) }, { phase: "OFF!" },
+      { phase: 1 }, { phase: "OFF", n1: "72" }, { phase: "OFF", n2: NaN }, { phase: "OFF", thrustLbf: Infinity },
+      { phase: "OFF", fuelFlowPph: null }, { phase: "OFF", rpm: "2400" }, { phase: "OFF", fuelFlowGph: -Infinity },
+      { phase: "OFF", state: "off" }, { phase: "OFF", state: 1 }, { phase: "OFF", start: 1.01 }, { phase: "OFF", start: -0.1 },
+      { phase: "OFF", start: NaN }, { phase: "OFF", blocked: "" }, { phase: "OFF", blocked: "<b>No fuel</b>" },
+      { phase: "OFF", blocked: "a".repeat(61) }, { phase: "OFF", blocked: 0 },
+      {}, null, []]) {
+      expect(isEngineStatus(engine), JSON.stringify(engine)).toBe(false);
+      expect(parseMessage({ ...envelope, type: "status", message: "Phone controls", status: { ...status, engine } })).toBeNull();
+    }
+    expect(isEngineStatus({ phase: "WINDMILLING" })).toBe(true);
+    expect(isEngineStatus({ phase: "OFF", n1: -0.4 })).toBe(true);
+    expect(isEngineStatus({ phase: "RUNNING", rpm: 2400, thrustLbf: 310, fuelFlowPph: 60, fuelFlowGph: 9.2 })).toBe(true);
+    expect(isEngineStatus({ phase: "OFF", state: "stopped", start: 0 })).toBe(true);
+  });
+
+  it("drops a malformed offer or resume on its own: neither ever costs a status its message", () => {
+    for (const handBack of ["later", true, 1, null, ""]) {
+      const parsed = parseMessage({ ...envelope, type: "status", message: "Desktop controls", status: { ...status, handBack } });
+      expect(parsed, JSON.stringify(handBack)).toEqual({ ...envelope, type: "status", message: "Desktop controls", status });
+    }
+    for (const blend of ["desktop", true, 0, null]) {
+      const parsed = parseMessage({ ...envelope, type: "status", message: "Phone controls", status: { ...status, blend } });
+      expect(parsed, JSON.stringify(blend)).toEqual({ ...envelope, type: "status", message: "Phone controls", status });
+    }
+    const granted = { ...envelope, type: "granted", requestId: 6, status: { ...status, owner: "phone" } } as const;
+    for (const resume of [false, 1, "true", null]) expect(parseMessage({ ...granted, resume })).toEqual(granted);
+  });
+
+  it("drops a starter flag that is anything but 1 without costing the frame its controls", () => {
+    for (const starter of [0, true, "1", 2, null]) expect(parseMessage({ ...frame, starter })).toEqual(frame);
+  });
+
+  it("carries the phone controller's settings both ways, bounded, with no epoch to match", () => {
+    const settings = { grid: "top", yawRelease: "hold", yawReturnMs: 450, haptics: true };
+    const message = { v: 1, type: "settings", session: "s", epoch: 0, settings, rev: 3 };
+    expect(parseMessage(message)).toEqual(message);
+    expect(parseMessage({ ...message, initial: true })).toEqual({ ...message, initial: true });
+    // Only `true` means initial; anything else is an ordinary change.
+    expect(parseMessage({ ...message, initial: "yes" })).toEqual(message);
+    for (const bad of [
+      { ...settings, grid: "left" }, { ...settings, yawRelease: "spring" }, { ...settings, yawReturnMs: 1501 },
+      { ...settings, yawReturnMs: -1 }, { ...settings, yawReturnMs: Number.NaN }, { ...settings, haptics: "on" },
+      { grid: "top", yawRelease: "hold", yawReturnMs: 0 },
+    ]) expect(parseMessage({ ...message, settings: bad })).toBeNull();
+    for (const rev of [-1, 1.5, "3", undefined]) expect(parseMessage({ ...message, rev })).toBeNull();
+  });
+
+  it("enforces UTF-8 bytes, including the exact 2 KiB boundary", () => {
+    const base = JSON.stringify({ ...frame, padding: "" });
+    const remaining = MAX_MESSAGE_BYTES - new TextEncoder().encode(base).byteLength;
+    const exact = JSON.stringify({ ...frame, padding: "x".repeat(remaining) });
+    expect(new TextEncoder().encode(exact).byteLength).toBe(MAX_MESSAGE_BYTES);
+    expect(parseMessage(exact)).not.toBeNull();
+    expect(parseMessage(JSON.stringify({ ...frame, padding: "x".repeat(remaining + 1) }))).toBeNull();
+    const unicode = JSON.stringify({ ...frame, padding: "😀".repeat(Math.floor(remaining / 4) + 1) });
+    expect(unicode.length).toBeLessThan(MAX_MESSAGE_BYTES);
+    expect(new TextEncoder().encode(unicode).byteLength).toBeGreaterThan(MAX_MESSAGE_BYTES);
+    expect(parseMessage(unicode)).toBeNull();
+  });
+
+  it("fails closed for unencodable values and copies incoming objects", () => {
+    const cycle: Record<string, unknown> = {};
+    cycle.self = cycle;
+    expect(parseMessage(cycle)).toBeNull();
+    expect(parseMessage({ ...frame, seq: 1n })).toBeNull();
+    const input = { ...frame, controls: { ...controls } };
+    const parsed = parseMessage(input);
+    input.controls.throttle = 0;
+    expect(parsed).toEqual(frame);
+  });
+});
+
+describe("phone control helpers", () => {
+  it("neutralizes only transient controls without mutating the source", () => {
+    const original = { ...controls, brake: 1 };
+    expect(neutralize(original)).toEqual({ ...controls, elevator: 0, aileron: 0, rudder: 0, brake: 0 });
+    expect(original).toEqual({ ...controls, brake: 1 });
+  });
+
+  it("requires centered sticks and a fully released brake while retaining arbitrary persistent settings", () => {
+    expect(isCentered(neutralize(controls))).toBe(true);
+    expect(isCentered({ ...NEUTRAL_CONTROLS, elevator: 0.03, aileron: -0.03, rudder: 0.03 })).toBe(true);
+    for (const key of ["elevator", "aileron", "rudder"]) {
+      expect(isCentered({ ...NEUTRAL_CONTROLS, [key]: 0.031 })).toBe(false);
+      expect(isCentered({ ...NEUTRAL_CONTROLS, [key]: -0.031 })).toBe(false);
+    }
+    expect(isCentered({ ...NEUTRAL_CONTROLS, brake: 0.001 })).toBe(false);
+  });
+
+  it("permits safe nonnegative counters including zero", () => {
+    expect(isCounter(0)).toBe(true);
+    expect(isCounter(Number.MAX_SAFE_INTEGER)).toBe(true);
+    for (const value of [-1, 0.1, Infinity, NaN, Number.MAX_SAFE_INTEGER + 1, "1", null]) {
+      expect(isCounter(value)).toBe(false);
+    }
+  });
+});
+
+
+describe("protocol version mismatch classification", () => {
+  it("identifies incompatible bounded envelopes without accepting their authority", () => {
+    for (const message of [
+      { v: 0, type: "hello" }, { v: 2, type: "welcome" }, { ...frame, v: 2 },
+      { v: Number.MAX_SAFE_INTEGER, type: "futureMessage" },
+    ]) {
+      expect(isProtocolVersionMismatch(message)).toBe(true);
+      expect(isProtocolVersionMismatch(JSON.stringify(message))).toBe(true);
+      expect(parseMessage(message)).toBeNull();
+    }
+    expect(isProtocolVersionMismatch(frame)).toBe(false);
+  });
+
+  it("does not misclassify malformed, oversized, or nonnumeric version envelopes", () => {
+    const circular: Record<string, unknown> = { v: 2, type: "hello" };
+    circular.self = circular;
+    for (const value of [null, undefined, "{", [], 2, circular,
+      { v: "2", type: "hello" }, { v: -1, type: "hello" }, { v: 1.1, type: "hello" },
+      { v: Number.MAX_SAFE_INTEGER + 1, type: "hello" }, { v: Infinity, type: "hello" },
+      { v: 2 }, { v: 2, type: "" }, { v: 2, type: "x".repeat(65) },
+      { v: 2, type: "hello", padding: "x".repeat(MAX_MESSAGE_BYTES) },
+      { v: 2, type: "hello", padding: "😀".repeat(600) },
+    ]) expect(isProtocolVersionMismatch(value)).toBe(false);
+  });
+});
+
+describe("haptic feedback field", () => {
+  const heartbeat = { v: 1, session: "s", epoch: 2, type: "heartbeat", lease: 9 };
+  it("accepts bounded latest-value feedback and drops malformed feedback without rejecting the heartbeat", () => {
+    const feedback = { v: 1, id: 3, pulseMs: 60, ttlMs: 90 };
+    expect(parseMessage({ ...heartbeat, feedback })).toEqual({ ...heartbeat, feedback });
+    expect(parseMessage({ ...heartbeat, feedback: { ...feedback, pulseMs: 0 } })).toMatchObject({ feedback: { pulseMs: 0 } });
+    for (const bad of [
+      { ...feedback, v: 2 }, { ...feedback, pulseMs: 61 }, { ...feedback, pulseMs: 1.5 }, { ...feedback, ttlMs: 0 },
+      { ...feedback, ttlMs: 100 }, { ...feedback, id: -1 }, [1, 2, 3], "buzz",
+    ]) {
+      const parsed = parseMessage({ ...heartbeat, feedback: bad });
+      expect(parsed).toEqual(heartbeat);
+    }
+    expect(isHapticFeedback(feedback)).toBe(true);
+  });
+});

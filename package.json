@@ -1,0 +1,149 @@
+{
+  "name": "@0sfs/rc",
+  "version": "0.1.0",
+  "private": true,
+  "description": "The 0SFS phone remote control: the phone app, pairing, transport, control sharing and camera playout.",
+  "license": "AGPL-3.0-only",
+  "type": "module",
+  "exports": {
+    "./appRoute": {
+      "source": "./src/appRoute.ts",
+      "default": "./src/appRoute.ts"
+    },
+    "./connectionDiagnostics": {
+      "source": "./src/connectionDiagnostics.ts",
+      "default": "./src/connectionDiagnostics.ts"
+    },
+    "./controlBlend": {
+      "source": "./src/controlBlend.ts",
+      "default": "./src/controlBlend.ts"
+    },
+    "./controlSharing": {
+      "source": "./src/controlSharing.ts",
+      "default": "./src/controlSharing.ts"
+    },
+    "./createPhoneControllerApp": {
+      "source": "./src/createPhoneControllerApp.tsx",
+      "default": "./src/createPhoneControllerApp.tsx"
+    },
+    "./createPhoneControlSession": {
+      "source": "./src/createPhoneControlSession.ts",
+      "default": "./src/createPhoneControlSession.ts"
+    },
+    "./createPhonePairingPanel": {
+      "source": "./src/createPhonePairingPanel.ts",
+      "default": "./src/createPhonePairingPanel.ts"
+    },
+    "./engineStatus": {
+      "source": "./src/engineStatus.ts",
+      "default": "./src/engineStatus.ts"
+    },
+    "./fullscreenMessage": {
+      "source": "./src/fullscreenMessage.tsx",
+      "default": "./src/fullscreenMessage.tsx"
+    },
+    "./pairing": {
+      "source": "./src/pairing.ts",
+      "default": "./src/pairing.ts"
+    },
+    "./phoneCameraTrace": {
+      "source": "./src/phoneCameraTrace.ts",
+      "default": "./src/phoneCameraTrace.ts"
+    },
+    "./phoneCameraTuning": {
+      "source": "./src/phoneCameraTuning.ts",
+      "default": "./src/phoneCameraTuning.ts"
+    },
+    "./PhoneCameraTuningPanel": {
+      "source": "./src/PhoneCameraTuningPanel.tsx",
+      "default": "./src/PhoneCameraTuningPanel.tsx"
+    },
+    "./PhoneController": {
+      "source": "./src/PhoneController.tsx",
+      "default": "./src/PhoneController.tsx"
+    },
+    "./phoneControllerClient": {
+      "source": "./src/phoneControllerClient.ts",
+      "default": "./src/phoneControllerClient.ts"
+    },
+    "./phoneControllerSettings": {
+      "source": "./src/phoneControllerSettings.ts",
+      "default": "./src/phoneControllerSettings.ts"
+    },
+    "./PhoneFullscreenPrompt": {
+      "source": "./src/PhoneFullscreenPrompt.tsx",
+      "default": "./src/PhoneFullscreenPrompt.tsx"
+    },
+    "./phonePopup.css": "./src/phonePopup.css",
+    "./PhoneQrScanner": {
+      "source": "./src/PhoneQrScanner.tsx",
+      "default": "./src/PhoneQrScanner.tsx"
+    },
+    "./phoneSettingsStore": {
+      "source": "./src/phoneSettingsStore.ts",
+      "default": "./src/phoneSettingsStore.ts"
+    },
+    "./PhoneUnpaired": {
+      "source": "./src/PhoneUnpaired.tsx",
+      "default": "./src/PhoneUnpaired.tsx"
+    },
+    "./protocol": {
+      "source": "./src/protocol.ts",
+      "default": "./src/protocol.ts"
+    },
+    "./RemoteControlTab": {
+      "source": "./src/RemoteControlTab.tsx",
+      "default": "./src/RemoteControlTab.tsx"
+    },
+    "./settings": {
+      "source": "./src/settings.ts",
+      "default": "./src/settings.ts"
+    },
+    "./styles/flightControls.css": "./src/styles/flightControls.css",
+    "./useFullscreenOffer": {
+      "source": "./src/useFullscreenOffer.ts",
+      "default": "./src/useFullscreenOffer.ts"
+    },
+    "./package.json": "./package.json"
+  },
+  "peerDependencies": {
+    "@0sfs/controls": "0.1.0",
+    "@0sfs/engines": "0.1.0",
+    "foss-earth": "0.1.0",
+    "jsqr": "1.4.0",
+    "peerjs": "1.5.5",
+    "qrcode": "1.5.4",
+    "react": "19.2.6",
+    "react-dom": "19.2.6"
+  },
+  "peerDependenciesMeta": {
+    "@0sfs/controls": {
+      "optional": true
+    },
+    "@0sfs/engines": {
+      "optional": true
+    },
+    "foss-earth": {
+      "optional": true
+    },
+    "jsqr": {
+      "optional": true
+    },
+    "peerjs": {
+      "optional": true
+    },
+    "qrcode": {
+      "optional": true
+    },
+    "react": {
+      "optional": true
+    },
+    "react-dom": {
+      "optional": true
+    }
+  },
+  "devDependencies": {
+    "@0sfs/logging": "0.1.0",
+    "vitest": "4.1.6"
+  }
+}

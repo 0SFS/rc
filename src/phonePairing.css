@@ -1,0 +1,15 @@
+/* The pairing half of the Remote Control tab. Buttons and hints are the flight panel's own. */
+.phone-pairing { display: grid; gap: 10px; font-size: 12px; line-height: 1.45; }
+.phone-pairing p { margin: 0; }
+.phone-pairing [hidden] { display: none; }
+.phone-pairing [data-status] { color: #dfe6e8; font-size: 13px; }
+.phone-pairing canvas { display: block; max-width: 100%; height: auto; margin: 4px auto; border-radius: 6px; }
+.phone-pairing button:focus-visible { outline: 2px solid #79d9ff; outline-offset: 2px; }
+.phone-pairing button:disabled { opacity: .5; cursor: wait; }
+.phone-pairing__actions { display: flex; flex-wrap: wrap; gap: 8px; }
+.phone-pairing [data-expiry], .phone-pairing [data-feedback] { color: #b5d8f7; }
+.phone-pairing [data-expiry]:empty, .phone-pairing [data-feedback]:empty { display: none; }
+.phone-pairing__diagnostics { border-top: 1px solid var(--flight-panel-line); padding-top: 6px; }
+.phone-pairing__diagnostics summary { cursor: pointer; padding: 6px 0; color: #b5d8f7; }
+.phone-pairing__diagnostics [data-cause] { margin: 8px 0; padding: 9px 11px; border: 1px solid #b65c5c; border-radius: 6px; color: #ffd6d6; user-select: text; }
+.phone-pairing__diagnostics pre { max-height: 240px; margin: 10px 0 0; padding: 10px; overflow: auto; border: 1px solid var(--flight-panel-line); border-radius: 6px; background: rgba(0, 0, 0, 0.28); color: #cfe2f2; font: 11px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace; white-space: pre-wrap; word-break: break-word; user-select: text; }

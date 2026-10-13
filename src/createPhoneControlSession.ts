@@ -1,0 +1,706 @@
+import { createPeerEndpoint, type SessionTransport, type PeerEndpoint } from "./peerTransport";
+import { createConnectionLog, describeIceFailure, type ConnectionLog } from "./connectionDiagnostics";
+import { createJoinSecret, createPairingUrl, createSessionId, INVITATION_TTL_MS } from "./pairing";
+import { DEFAULT_CONTROL_SHARING, type ControlSharing } from "./controlSharing";
+import { createPhoneCameraReceiver } from "./phoneCameraPlayout";
+import { DEFAULT_PHONE_CAMERA_TUNING, type PhoneCameraTuning } from "./phoneCameraTuning";
+import { mergePairedPhoneSettings } from "./phoneControllerSettings";
+import {
+  HANDOFF_MS, HAPTIC_FEEDBACK_TTL_MS, HAPTIC_FEEDBACK_VERSION, HEARTBEAT_MS, MAX_HAPTIC_PULSE_MS, STALE_MS,
+  PROTOCOL_MISMATCH_MESSAGE, isCentered, isProtocolVersionMismatch, neutralize, parseMessage,
+  type ActionMessage, type AircraftStatus, type CameraAim, type ControlFrame, type ControlSurfaceState,
+  type HandBack, type HapticFeedbackFrame, type PhoneControllerSettings, type PhoneSettingsMessage, type RemoteMessage,
+} from "./protocol";
+
+export interface PhoneSessionSnapshot {
+  phase: "off" | "preparing" | "invitation" | "authenticating" | "paired" | "error" | "expired";
+  message: string;
+  owner: "local" | "phone";
+  /** This computer holds control the phone flew and never let go of, and gives it back by itself. */
+  returning: boolean;
+  invitationUrl: string | null;
+  expiresAt: number | null;
+  signalingAvailable: boolean;
+}
+export interface PhoneControlSessionOptions {
+  getStatus(): AircraftStatus;
+  /** Flight input on this computer is held or moving now: keys, a deflected stick, a HUD control under a finger. */
+  hasActiveLocalInput(): boolean;
+  isPageVisible?(): boolean;
+  /** Who flies when both devices could; read at every decision. Defaults to the catalogue's defaults. */
+  getSharing?(): ControlSharing;
+  /**
+   * `blend`: the phone joins or leaves a blend with this computer, whose own
+   * controls stay live throughout, so only the levers in `controls` change
+   * hands (`ControlSharing.mode`).
+   */
+  onOwnershipChange(owner: "local" | "phone", controls: ControlSurfaceState, blend: boolean): void;
+  setPaused(paused: boolean): void;
+  setViewMode(mode: "first" | "third"): void;
+  /** Absent hosts simply never advertise `gearDown`, so no phone offers the control. */
+  setGearDown?(down: boolean): void;
+  /** The phone's throttle ring filled at idle. Hosts without it never advertise an engine `state`. */
+  shutdownEngine?(): void;
+  /**
+   * Called when a camera gesture arrives. A paused host renders only on
+   * request, so without this the pad would be dead exactly when someone wants
+   * to look at the aircraft — the desktop's own mouse drag schedules its frame
+   * from the pointer event, and this is the phone's equivalent.
+   */
+  onCameraAim?(): void;
+  /** The camera trackpad settings, read as each frame arrives and each view is drawn. Defaults to the catalogue's defaults. */
+  getCameraTuning?(): PhoneCameraTuning;
+  /**
+   * The phone controller's own settings, kept here with this computer's. A
+   * phone that sends its own is answered with these, and sent them again on
+   * `syncPhoneSettings`. Absent, a phone keeps its own.
+   */
+  phoneSettings?: { get(): PhoneControllerSettings; set(settings: PhoneControllerSettings): void };
+  /**
+   * The opt-in camera trace. Present, the heartbeat asks the phone for its
+   * timings, and every control frame that reaches this session is reported
+   * with what became of it. Measurement only.
+   */
+  trace?: PhoneControlTraceSink;
+  now?: () => number;
+  createEndpoint?: typeof createPeerEndpoint;
+  log?: ConnectionLog;
+}
+/** Why a control frame was not used. `accepted` frames moved the controls and the camera. */
+export type ControlFrameOutcome = "accepted" | "not-owner" | "out-of-order" | "stale-lease" | "handoff-mismatch" | "rate-window";
+export interface PhoneControlTraceSink {
+  controlFrame(frame: ControlFrame, outcome: ControlFrameOutcome, receivedAt: number): void;
+}
+interface PendingHandoff {
+  id: number; baseline: ControlSurfaceState; paused: boolean; deadline: number; ack: boolean; frame: ControlFrame | null;
+}
+/** A longer gap between this session's own wake-ups, which come every heartbeat, is this computer too busy to listen. */
+const BUSY_GAP_MS = 2 * HEARTBEAT_MS;
+const seconds = (ms: number) => `${(ms / 1000).toFixed(1)} s`;
+
+/** The desktop, not PeerJS Cloud, authenticates the invitation and owns flight authority. */
+export function createPhoneControlSession(options: PhoneControlSessionOptions) {
+  const now = options.now ?? (() => performance.now());
+  // One log for the dialog's lifetime: repeated pairing attempts stay in a
+  // single timeline, which is what a bug report needs.
+  const log = options.log ?? createConnectionLog("desktop", now);
+  const isPageVisible = options.isPageVisible ?? (() => true);
+  const listeners = new Set<() => void>();
+  const transports = new Set<SessionTransport>();
+  const cleanup = new Map<SessionTransport, () => void>();
+  let snapshot: PhoneSessionSnapshot = {
+    phase: "off", message: "No phone paired.", owner: "local", returning: false,
+    invitationUrl: null, expiresAt: null, signalingAvailable: true,
+  };
+  let endpoint: PeerEndpoint | null = null;
+  let active: SessionTransport | null = null;
+  let generation = 0;
+  let disposed = false;
+  let secret: string | null = null;
+  let session = "";
+  let epoch = 0;
+  let leaseCounter = 0;
+  const leases = new Map<number, { time: number; epoch: number }>();
+  let pending: PendingHandoff | null = null;
+  /** The newest accepted frame. `heardAt` is on the listening clock; `receivedAt` is wall time, for timings. */
+  let latest: { frame: ControlFrame; receivedAt: number; heardAt: number } | null = null;
+  /** When a flying phone went quiet, on the listening clock, while its last command is held. */
+  let quietSince: number | null = null;
+  let lastSeq = -1;
+  let localReady = false;
+  let remoteReady = false;
+  let setupTimer: ReturnType<typeof setTimeout> | undefined;
+  let ticks = 0;
+  let lastAppliedSeq: number | undefined;
+  let receiveToApplyMs: number | undefined;
+  const frameTimes: number[] = [];
+  const actions = new Map<number, RemoteMessage>();
+  let maxActionId = -1;
+  let pendingStatus: { epoch: number; message: string; deadline: number; attempts: number } | null = null;
+  // One latest-value haptic slot; never a queue of impacts.
+  let feedback: { id: number; pulseMs: number; queuedAt: number; epoch: number } | null = null;
+  let feedbackId = 0;
+  /** The newest settings message this session's phone sent, or null if it never sent one; and the last answer sent. */
+  let phoneSettingsRev: number | null = null;
+  let phoneSettingsSent = "";
+  /**
+   * The phone flew and has not let go: only its Release, Take control here, or
+   * the end of the session ends this. While it stands, control that a hidden
+   * tab, lost input or flight input here took away goes back by itself, as
+   * `ControlSharing.handover` allows.
+   */
+  let claim = false;
+  /** Taking control away paused a running flight, so handing it back resumes it. */
+  let resumeOnReturn = false;
+  /** When flight input here last happened; the return waits for these controls to rest. */
+  let lastLocalInputAt = -Infinity;
+  /** The phone was granted control to fly together with this computer. */
+  let grantedBlend = false;
+  const sharing = (): ControlSharing => options.getSharing?.() ?? DEFAULT_CONTROL_SHARING;
+  const letGo = () => { claim = false; resumeOnReturn = false; };
+  let wokeAt = now();
+  let busyMs = 0;
+  /**
+   * This computer's clock, less the time it was too busy to listen: a long
+   * task, a shader compiling as the engine lights. Leases, freshness and the
+   * hold run on it. While this computer is stalled nothing from the phone can
+   * reach it and no newer lease can reach the phone, so its own stall is never
+   * the phone's silence, and the frames queued behind it are as fresh as the
+   * leases they carry.
+   */
+  const listening = (): number => {
+    const time = now();
+    if (time - wokeAt > BUSY_GAP_MS) busyMs += time - wokeAt - HEARTBEAT_MS;
+    wokeAt = time;
+    return time - busyMs;
+  };
+
+  const returning = (owner = snapshot.owner) => {
+    const { handover } = sharing();
+    return claim && owner === "local" && (handover === "auto" || handover === "phone");
+  };
+  const publish = (patch: Partial<PhoneSessionSnapshot> = {}) => {
+    const next = { ...snapshot, ...patch };
+    snapshot = { ...next, returning: returning(next.owner) };
+    listeners.forEach(listener => listener());
+  };
+  const envelope = () => ({ v: 1 as const, session, epoch });
+  /**
+   * Whether control goes back to the phone now, once these controls rest, or
+   * only when its pilot asks (undefined). The phone asks by itself on `now`.
+   */
+  const handBack = (current: AircraftStatus): HandBack | undefined => {
+    if (!claim || snapshot.owner === "phone" || pending || !isPageVisible()) return undefined;
+    const { handover, returnIdleMs } = sharing();
+    if (handover === "stay" || handover === "computer") return undefined;
+    // Never offer what the request would refuse: the same rest and centring.
+    if (localInputBlocks() && handover === "auto" && (options.hasActiveLocalInput() || !isCentered(current.controls)
+      || now() - lastLocalInputAt < returnIdleMs)) return "idle";
+    return "now";
+  };
+  /**
+   * Flight input here keeps the phone waiting, except when control is latched
+   * to it, or when the two blend and nothing needs to wait.
+   */
+  const localInputBlocks = () => sharing().mode !== "blend" && sharing().handover !== "phone";
+  const blending = () => snapshot.owner === "phone" && grantedBlend;
+  const status = (): AircraftStatus => {
+    const current = options.getStatus();
+    const back = handBack(current);
+    return {
+      ...current, owner: snapshot.owner, ...(back ? { handBack: back } : {}),
+      ...(blending() ? { blend: sharing().priority } : {}),
+    };
+  };
+  const send = (message: RemoteMessage) => {
+    const sent = active?.sendReliable(message) ?? false;
+    // A delivered authoritative response supersedes any older status retry.
+    if (sent && ["ack", "granted", "handoff", "welcome"].includes(message.type)) pendingStatus = null;
+    return sent;
+  };
+  const retryStatus = () => {
+    const queued = pendingStatus;
+    if (!queued) return;
+    if (!active || !localReady || !remoteReady || queued.epoch !== epoch) { pendingStatus = null; return; }
+    if (now() >= queued.deadline || queued.attempts >= 8) {
+      pendingStatus = null;
+      fail("Could not synchronize phone controls. Scan a new QR to reconnect."); return;
+    }
+    queued.attempts += 1;
+    // Read the current applied state at send time; never replay an old baseline.
+    const sent = send({ ...envelope(), type: "status", message: queued.message, status: status() });
+    if (pendingStatus !== queued) return;
+    if (sent) pendingStatus = null;
+    else if (queued.attempts >= 8) {
+      pendingStatus = null;
+      fail("Could not synchronize phone controls. Scan a new QR to reconnect.");
+    }
+  };
+  const publishStatus = (message: string) => {
+    publish({ message });
+    if (active && localReady && remoteReady) {
+      pendingStatus = { epoch, message, deadline: pendingStatus?.deadline ?? now() + 500, attempts: pendingStatus?.attempts ?? 0 };
+      retryStatus();
+    }
+  };
+  const freshLease = (id: number) => {
+    const lease = leases.get(id);
+    return Boolean(lease && lease.epoch === epoch && listening() - lease.time <= STALE_MS);
+  };
+  /** How long the phone has gone unheard, on the listening clock. */
+  const silence = () => (latest ? listening() - latest.heardAt : Infinity);
+  const freshInput = () => Boolean(latest && silence() <= STALE_MS && freshLease(latest.frame.lease));
+  /**
+   * The phone's last command still stands: fresh, or held through a silence
+   * no longer than `ControlSharing.holdMs` past the stale limit. A starter, a
+   * stick or a brake the pilot is holding is then still held.
+   */
+  const holding = () => silence() <= STALE_MS + sharing().holdMs;
+  const tuning = (): PhoneCameraTuning => options.getCameraTuning?.() ?? DEFAULT_PHONE_CAMERA_TUNING;
+  /**
+   * Trackpad movement that has arrived but not yet been drawn. Frames can land
+   * faster than the host renders, so every one is kept rather than overwriting
+   * one another — dropping a swipe on the floor because two frames shared a
+   * video frame is how a trackpad comes out feeling slow. How it is read and
+   * when it is drawn are the A/B settings in `phoneCameraTuning.ts`.
+   *
+   * A view, not a control surface: it cannot refresh a lease, take authority or
+   * advance physics.
+   */
+  const aim = createPhoneCameraReceiver(tuning);
+  const newEpoch = () => {
+    epoch += 1; latest = null; quietSince = null; lastSeq = -1; leases.clear(); actions.clear(); pending = null; pendingStatus = null; feedback = null; aim.reset();
+    maxActionId = -1; lastAppliedSeq = undefined; receiveToApplyMs = undefined; frameTimes.length = 0;
+  };
+  const issueLease = () => {
+    const time = listening();
+    for (const [id, lease] of leases) if (time - lease.time > STALE_MS) leases.delete(id);
+    const id = ++leaseCounter;
+    leases.set(id, { time, epoch });
+    return id;
+  };
+  const acknowledge = (id: number, ok: boolean, message: string) => {
+    const result: RemoteMessage = { ...envelope(), type: "ack", id, ok, message, status: status() };
+    actions.set(id, result);
+    if (actions.size > 64) actions.delete(actions.keys().next().value!);
+    send(result);
+  };
+  const revoke = (message: string, pause: boolean, force = false) => {
+    const wasPhone = snapshot.owner === "phone";
+    if (!wasPhone && !pending && !force) return;
+    const canceled = pending?.id;
+    const controls = neutralize(options.getStatus().controls);
+    newEpoch();
+    snapshot = { ...snapshot, owner: "local" };
+    // Only taken back by hand: the phone waits for its pilot to ask again.
+    if (sharing().handover === "stay") letGo();
+    if (wasPhone) options.onOwnershipChange("local", controls, grantedBlend);
+    if (pause && wasPhone) {
+      if (claim && !options.getStatus().paused) resumeOnReturn = true;
+      options.setPaused(true);
+    }
+    if (canceled !== undefined) acknowledge(canceled, false, message);
+    publishStatus(message);
+  };
+  const closeAll = () => {
+    letGo();
+    clearTimeout(setupTimer); setupTimer = undefined;
+    active = null;
+    for (const detach of cleanup.values()) detach();
+    cleanup.clear();
+    for (const transport of transports) transport.close();
+    transports.clear();
+    endpoint?.destroy(); endpoint = null;
+    secret = null; session = ""; localReady = remoteReady = false;
+    newEpoch();
+  };
+  const disconnect = (message = "Phone disconnected. Create a new QR to pair.") => {
+    if (disposed) return;
+    revoke(message, true);
+    generation += 1;
+    closeAll();
+    publish({ phase: "off", invitationUrl: null, expiresAt: null, message });
+  };
+  const fail = (message: string) => {
+    if (disposed) return;
+    log.recordFailure("session", "host-failure", message);
+    revoke(message, true);
+    generation += 1;
+    closeAll();
+    publish({ phase: "error", invitationUrl: null, expiresAt: null, message });
+  };
+  const maybeGrant = () => {
+    if (!pending || !pending.ack || !pending.frame) return;
+    if (now() >= pending.deadline || !freshInput() || handoffChanged()) {
+      revoke("Center controls and tap Fly again.", false); return;
+    }
+    const { id, baseline } = pending;
+    pending = null;
+    claim = true;
+    grantedBlend = sharing().mode === "blend";
+    snapshot = { ...snapshot, owner: "phone" };
+    options.onOwnershipChange("phone", baseline, grantedBlend);
+    // Handing control back resumes the flight that taking it away paused, and
+    // only that: a pause anyone chose in between cleared this. The phone lifts
+    // it once the grant reaches it, so nothing flies under a phone that does
+    // not yet know it is flying.
+    const resume = resumeOnReturn && options.getStatus().paused;
+    resumeOnReturn = false;
+    const result: RemoteMessage = { ...envelope(), type: "granted", requestId: id, status: status(), ...(resume ? { resume: true as const } : {}) };
+    actions.set(id, result);
+    send(result);
+    publish({ message: `${flyingMessage()}${options.getStatus().paused ? " · Simulation paused" : ""}` });
+  };
+  const flyingMessage = () => grantedBlend ? "Phone and computer blended" : "Phone controls";
+  const handoffChanged = () => {
+    if (!pending) return false;
+    const current = options.getStatus();
+    return !isPageVisible() || (localInputBlocks() && (options.hasActiveLocalInput() || !isCentered(current.controls)))
+      || current.paused !== pending.paused
+      || (["throttle", "pitchTrim", "rollTrim", "flaps"] as const).some(key => current.controls[key] !== pending!.baseline[key]);
+  };
+  /** A phone's own settings: kept here, as `PhoneSettingsMessage` says, and answered with what this computer then holds. */
+  const receivePhoneSettings = (message: PhoneSettingsMessage) => {
+    if (!options.phoneSettings || (phoneSettingsRev !== null && message.rev <= phoneSettingsRev)) return;
+    phoneSettingsRev = message.rev;
+    options.phoneSettings.set(message.initial ? mergePairedPhoneSettings(options.phoneSettings.get(), message.settings) : message.settings);
+    syncPhoneSettings();
+  };
+  const syncPhoneSettings = () => {
+    if (phoneSettingsRev === null || !options.phoneSettings || !active || !localReady || !remoteReady) return;
+    const settings = options.phoneSettings.get();
+    const key = JSON.stringify([settings, phoneSettingsRev]);
+    if (key !== phoneSettingsSent && send({ ...envelope(), type: "settings", settings, rev: phoneSettingsRev })) phoneSettingsSent = key;
+  };
+  const handleAction = (message: ActionMessage) => {
+    if (actions.has(message.id)) { send(actions.get(message.id)!); return; }
+    if (pending?.id === message.id || message.id <= maxActionId) return;
+    maxActionId = message.id;
+    // Release is the phone letting go on purpose, so nothing hands control
+    // back. It only ever removes authority, so it counts even when stale.
+    if (message.action === "releaseControl") letGo();
+    if (!freshLease(message.lease)) { acknowledge(message.id, false, "Connection is stale. Try again."); return; }
+    if (message.action === "requestControl") {
+      if (snapshot.owner === "phone" || pending) { acknowledge(message.id, false, "Control request already active."); return; }
+      if (sharing().handover === "computer") {
+        acknowledge(message.id, false, "Control is latched to the computer. Its Remote Control tab can change that."); return;
+      }
+      if (!isPageVisible()) { acknowledge(message.id, false, "Return to the desktop tab before taking control."); return; }
+      const baseline = neutralize(options.getStatus().controls);
+      if (localInputBlocks() && (options.hasActiveLocalInput() || !isCentered(options.getStatus().controls))) {
+        acknowledge(message.id, false, "Center controls to take over."); return;
+      }
+      newEpoch();
+      pending = { id: message.id, baseline, paused: options.getStatus().paused, deadline: now() + HANDOFF_MS, ack: false, frame: null };
+      if (!send({ ...envelope(), type: "handoff", requestId: message.id, controls: baseline, lease: issueLease() })) {
+        revoke("Control transfer could not be sent. Tap Fly again.", false); return;
+      }
+      publish({ message: "Transferring control to phone…" });
+      return;
+    }
+    if (message.action === "releaseControl" && pending) {
+      revoke("Phone control transfer canceled.", false);
+      acknowledge(message.id, true, "Control transfer canceled."); return;
+    }
+    if (snapshot.owner !== "phone") { acknowledge(message.id, false, "Tap Fly before using flight controls."); return; }
+    if (message.action === "releaseControl") {
+      revoke("Phone released control · Simulation paused", true);
+    } else if (message.action === "setPaused") {
+      if (message.value === false && !freshInput()) { acknowledge(message.id, false, "Fresh phone input is required to resume."); return; }
+      options.setPaused(message.value as boolean);
+    } else if (message.action === "setViewMode") {
+      options.setViewMode(message.value as "first" | "third");
+    } else if (message.action === "setGearDown") {
+      if (!options.setGearDown) { acknowledge(message.id, false, "This simulator cannot move the gear."); return; }
+      options.setGearDown(message.value as boolean);
+    } else if (message.action === "shutdownEngine") {
+      if (!options.shutdownEngine) { acknowledge(message.id, false, "This simulator cannot shut its engine down."); return; }
+      options.shutdownEngine();
+    }
+    acknowledge(message.id, true, "Applied");
+    publishStatus(snapshot.owner === "phone" ? "Phone controls" : "Desktop controls");
+  };
+  const onNative = (input: unknown, rejectVersion: () => void) => {
+    const message = parseMessage(input);
+    if (!message && isProtocolVersionMismatch(input)) { rejectVersion(); return; }
+    if (!message || !("session" in message) || message.session !== session || message.epoch !== epoch || !localReady || !remoteReady) return;
+    if (message.type === "ping") { active?.sendNative({ ...message, type: "pong" }, true); return; }
+    if (message.type !== "controls") return;
+    const receivedAt = now();
+    const report = (outcome: ControlFrameOutcome) => { options.trace?.controlFrame(message, outcome, receivedAt); };
+    if (!pending && snapshot.owner !== "phone") { report("not-owner"); return; }
+    if (message.seq <= lastSeq) { report("out-of-order"); return; }
+    if (!freshLease(message.lease)) { report("stale-lease"); return; }
+    if (pending && (!isCentered(message.controls)
+      || ["throttle", "pitchTrim", "rollTrim", "flaps"].some(key => message.controls[key as keyof ControlSurfaceState] !== pending!.baseline[key as keyof ControlSurfaceState]))) { report("handoff-mismatch"); return; }
+    while (frameTimes.length && receivedAt - frameTimes[0] >= 1000) frameTimes.shift();
+    // The phone schedules 60 Hz plus prompt touch/release events up to 120 Hz.
+    // Also bound accepted input here so excessive frames cannot refresh authority.
+    if (frameTimes.length >= 120) { report("rate-window"); return; }
+    report("accepted");
+    frameTimes.push(receivedAt);
+    lastSeq = message.seq;
+    latest = { frame: message, receivedAt, heardAt: listening() };
+    if (snapshot.owner === "phone" && aim.receive(message, receivedAt)) options.onCameraAim?.();
+    if (pending) { pending.frame = message; maybeGrant(); }
+  };
+
+  const accept = (transport: SessionTransport) => {
+    if (disposed || active || !secret || snapshot.phase !== "invitation" || transports.size >= 4) { transport.close(); return; }
+    const currentGeneration = generation;
+    transports.add(transport);
+    // PeerJS reports an incoming connection before its reliable data channel is
+    // necessarily open. Starting this deadline here races a slow ICE/DTLS
+    // setup and can close a legitimate phone before it gets a chance to send
+    // `hello`. The transport already bounds that setup at 15 seconds; this
+    // shorter deadline is only for an opened, unauthenticated connection.
+    let helloTimer: ReturnType<typeof setTimeout> | undefined;
+    let rejectingVersion = false;
+    const rejectVersion = () => {
+      if (rejectingVersion) return;
+      rejectingVersion = true;
+      clearTimeout(helloTimer);
+      if (active === transport) {
+        revoke(PROTOCOL_MISMATCH_MESSAGE, true);
+        localReady = remoteReady = false;
+        clearTimeout(setupTimer); setupTimer = undefined;
+        publish({ phase: "error", message: PROTOCOL_MISMATCH_MESSAGE });
+      } else publish({ message: PROTOCOL_MISMATCH_MESSAGE });
+      transport.sendReliable({ v: 1, type: "reject", reason: PROTOCOL_MISMATCH_MESSAGE });
+      // Give the ordered rejection a bounded opportunity to leave the channel.
+      // Authority has already been revoked and all further input is ignored.
+      helloTimer = setTimeout(() => {
+        if (disposed || currentGeneration !== generation) return;
+        if (active === transport) fail(PROTOCOL_MISMATCH_MESSAGE);
+        else transport.close();
+      }, 100);
+    };
+    const startHelloTimer = () => {
+      if (rejectingVersion || disposed || currentGeneration !== generation || !transports.has(transport) || active) return;
+      helloTimer = setTimeout(() => transport.close(), 5000);
+    };
+    const detach = [
+      transport.onReliable(input => {
+        if (rejectingVersion || disposed || currentGeneration !== generation) return;
+        const message = parseMessage(input);
+        if (!message) {
+          if (isProtocolVersionMismatch(input)) rejectVersion();
+          else transport.close();
+          return;
+        }
+        if (transport !== active) {
+          if (message.type !== "hello" || !secret || message.secret !== secret || snapshot.expiresAt === null || now() >= snapshot.expiresAt) {
+            transport.sendReliable({ v: 1, type: "reject", reason: "Invitation expired or unavailable. Scan a new QR." });
+            transport.close(); return;
+          }
+          // Consume the invitation before any asynchronous native channel setup.
+          active = transport; secret = null; session = createSessionId(); maxActionId = -1;
+          phoneSettingsRev = null; phoneSettingsSent = "";
+          clearTimeout(helloTimer);
+          newEpoch();
+          publish({ phase: "authenticating", invitationUrl: null, expiresAt: null, message: "Connecting phone controls…" });
+          setupTimer = setTimeout(() => {
+            if (!disposed && currentGeneration === generation && active === transport && (!localReady || !remoteReady)) {
+              const stalled = localReady ? "the phone never confirmed its control channel" : "this computer never opened its control channel";
+              fail(log.facts().failure?.detail
+                ?? `Could not connect directly: ${stalled}. ${describeIceFailure(log.facts())}`);
+            }
+          }, 15_000);
+          for (const other of [...transports]) if (other !== active) other.close();
+          const ready = transport.openNative();
+          const streamId = transport.nativeStreamId;
+          if (streamId === null) { void ready.catch(() => {}); fail("Could not create the phone control channel."); return; }
+          if (!send({ ...envelope(), type: "welcome", streamId, status: status() })) {
+            void ready.catch(() => {}); fail("Could not send phone connection setup. Create a new QR."); return;
+          }
+          void ready.then(() => {
+            if (rejectingVersion || disposed || currentGeneration !== generation || active !== transport) return;
+            localReady = true;
+            if (!send({ ...envelope(), type: "ready" })) { fail("Could not finish phone connection setup. Create a new QR."); return; }
+            if (remoteReady) {
+              clearTimeout(setupTimer); setupTimer = undefined;
+              publish({ phase: "paired", message: "Phone paired · Desktop controls" });
+            }
+          }).catch(() => {
+            if (rejectingVersion || disposed || currentGeneration !== generation) return;
+            fail(log.facts().failure?.detail ?? `Could not connect directly. ${describeIceFailure(log.facts())}`);
+          });
+          return;
+        }
+        if (!("session" in message) || message.session !== session) return;
+        // Not authority, so not bound to an epoch: a change made on the phone
+        // just as control changed hands still counts.
+        if (message.type === "settings") { if (localReady && remoteReady) receivePhoneSettings(message); return; }
+        if (message.epoch !== epoch) return;
+        if (message.type === "ready") {
+          remoteReady = true;
+          if (localReady) {
+            clearTimeout(setupTimer); setupTimer = undefined;
+            publish({ phase: "paired", message: "Phone paired · Desktop controls" });
+          }
+        } else if (localReady && remoteReady && message.type === "action") handleAction(message);
+        else if (message.type === "handoffAck" && pending?.id === message.requestId) { pending.ack = true; maybeGrant(); }
+      }),
+      transport.onNative(input => {
+        if (rejectingVersion || disposed || active !== transport || currentGeneration !== generation) return;
+        onNative(input, rejectVersion);
+      }),
+      transport.onClose(() => {
+        clearTimeout(helloTimer);
+        cleanup.get(transport)?.(); cleanup.delete(transport); transports.delete(transport);
+        if (!disposed && active === transport && currentGeneration === generation) {
+          if (rejectingVersion) fail(PROTOCOL_MISMATCH_MESSAGE);
+          else disconnect("Connection lost. Scan a new QR to pair again.");
+        }
+      }),
+    ];
+    cleanup.set(transport, () => { clearTimeout(helloTimer); detach.forEach(fn => fn()); });
+    void transport.ready.then(startHelloTimer).catch(() => transport.close());
+  };
+
+  const takeFeedback = (): { feedback?: HapticFeedbackFrame } => {
+    const queued = feedback;
+    feedback = null;
+    if (!queued || queued.epoch !== epoch || snapshot.owner !== "phone") return {};
+    const ttlMs = Math.floor(HAPTIC_FEEDBACK_TTL_MS - (now() - queued.queuedAt));
+    return ttlMs > 0 ? { feedback: { v: HAPTIC_FEEDBACK_VERSION, id: queued.id, pulseMs: queued.pulseMs, ttlMs } } : {};
+  };
+
+  /**
+   * A flying phone gone quiet keeps flying on its last command, which the
+   * Remote Control tab says, and heard again within the hold it flies on as
+   * if nothing happened. Past the hold, control comes back here without a
+   * pause — stick, rudder, brake and starter let go, the levers stay — and
+   * goes back to the phone as any loss's does, once it is heard from again.
+   */
+  const watchSilence = () => {
+    if (snapshot.owner !== "phone" || !latest) return;
+    const quiet = silence();
+    if (!holding()) {
+      log.record("channel", "phone-silent", `No phone input for ${seconds(quiet)}; control came back to this computer`, "warn");
+      const back = claim && (sharing().handover === "auto" || sharing().handover === "phone");
+      revoke(`Phone signal lost · Desktop controls${back ? " · Back to the phone when it is heard" : ""}`, false);
+    } else if (quiet > STALE_MS && quietSince === null) {
+      quietSince = latest.heardAt;
+      publish({ message: `${flyingMessage()} · Phone signal lost · Holding its last command` });
+    } else if (quiet <= STALE_MS && quietSince !== null) {
+      log.record("channel", "phone-silent", `No phone input for ${seconds(latest.heardAt - quietSince)}; its last command held`, "warn");
+      quietSince = null;
+      publish({ message: flyingMessage() });
+    }
+  };
+
+  const timer = setInterval(() => {
+    if (disposed) return;
+    // Every heartbeat wakes the listening clock, so a late one is this computer's stall.
+    listening();
+    if (snapshot.phase === "invitation" && snapshot.expiresAt !== null && now() >= snapshot.expiresAt) {
+      generation += 1;
+      closeAll(); publish({ phase: "expired", invitationUrl: null, expiresAt: null, message: "QR expired. Create a new QR." }); return;
+    }
+    if (pending && (now() >= pending.deadline || handoffChanged())) revoke("Control transfer canceled. Tap Fly again.", false);
+    if (snapshot.owner === "phone" && !isPageVisible()) revoke("Desktop hidden · Simulation paused", true);
+    watchSilence();
+    if (snapshot.owner === "phone" && sharing().handover === "computer") revoke("Control latched to the computer", false);
+    // Sharing changed under a flying phone: take control back, so the hand-back
+    // grants it again under the new sharing, with this computer's controls set to match.
+    if (snapshot.owner === "phone" && (sharing().mode === "blend") !== grantedBlend) revoke("Sharing changed", false);
+    // Someone resumed in between: a pause chosen after that is theirs to keep.
+    if (resumeOnReturn && !options.getStatus().paused) resumeOnReturn = false;
+    if (returning() !== snapshot.returning) publish();
+    retryStatus();
+    if (!active || !localReady || !remoteReady) return;
+    const lease = issueLease();
+    ticks += 1;
+    active.sendNative({ ...envelope(), type: "heartbeat", lease,
+      ...(ticks % 2 === 0 ? { status: status(), appliedSeq: lastAppliedSeq, receiveToApplyMs } : {}),
+      ...takeFeedback(),
+      ...(options.trace ? { trace: 1 as const } : {}),
+      // Absent means the original timing, which is all an older phone knows.
+      ...(tuning().send === "batch" ? { controlSend: "batch" as const } : {}),
+    }, true);
+  }, HEARTBEAT_MS);
+
+  return {
+    /** The pairing timeline, for the dialog's diagnostics panel and bug reports. */
+    log,
+    subscribe(listener: () => void) { listeners.add(listener); return () => { listeners.delete(listener); }; },
+    getSnapshot: () => snapshot,
+    async startPairing() {
+      if (disposed) return;
+      disconnect();
+      const currentGeneration = generation;
+      publish({ phase: "preparing", message: "Preparing connection…" });
+      log.reset("Creating a new QR");
+      try {
+        const next = (options.createEndpoint ?? createPeerEndpoint)({ log, role: "desktop", onConnection: transport => {
+          if (disposed || currentGeneration !== generation) { transport.close(); return; }
+          accept(transport);
+        }, onSignalingState: available => {
+          if (!disposed && currentGeneration === generation) publish({ signalingAvailable: available });
+        } });
+        endpoint = next;
+        const peerId = await next.ready;
+        if (disposed || currentGeneration !== generation) { next.destroy(); return; }
+        secret = createJoinSecret();
+        publish({ phase: "invitation", message: "Scan with your phone camera", invitationUrl: createPairingUrl(peerId, secret), expiresAt: now() + INVITATION_TTL_MS });
+      } catch (error: unknown) {
+        if (disposed || currentGeneration !== generation) return;
+        fail(log.facts().failure?.detail
+          ?? (error instanceof Error && error.message ? error.message : "Pairing service unavailable. Retry."));
+      }
+    },
+    disconnect,
+    /**
+     * Take control here on purpose: the Remote Control tab's button. The phone
+     * then waits for its pilot to tap Take control, whatever `handover` says.
+     */
+    takeControl(message = "Desktop controls") {
+      const held = claim;
+      letGo();
+      if (snapshot.owner === "phone" || pending) revoke(message, false);
+      else if (held) publishStatus(message);
+    },
+    /**
+     * Flight input on this computer: a key, a gamepad, a HUD control. It takes
+     * control from the phone unless control is latched to the phone, and holds
+     * off handing control back until these controls have rested.
+     */
+    noteLocalInput() {
+      lastLocalInputAt = now();
+      const { handover } = sharing();
+      if (handover === "phone" || blending()) return;
+      revoke(handover === "auto" && claim ? "Desktop controls · Back to the phone when these controls rest" : "Desktop controls", false);
+    },
+    cancelHandoff(message = "Flight settings changed. Tap Fly again.") { if (pending) revoke(message, false); },
+    reset() { revoke("Aircraft reset · Desktop controls", false, true); },
+    syncStatus() {
+      if (resumeOnReturn && !options.getStatus().paused) resumeOnReturn = false;
+      if (active) publishStatus(snapshot.owner === "phone" ? flyingMessage() : "Phone paired · Desktop controls");
+    },
+    beforeStep(localControls: ControlSurfaceState): ControlSurfaceState | false {
+      if (snapshot.owner !== "phone") return localControls;
+      if (!isPageVisible()) { revoke("Desktop hidden · Simulation paused", true); return false; }
+      const { frame, receivedAt } = latest!;
+      // Past the hold: let go, as the watchdog does within a heartbeat when it hands control back here.
+      if (!holding()) return neutralize(frame.controls);
+      if (frame.seq !== lastAppliedSeq) receiveToApplyMs = now() - receivedAt;
+      lastAppliedSeq = frame.seq;
+      return { ...frame.controls };
+    },
+    /**
+     * Whether the phone, flying, is holding its throttle lever to start the
+     * engine. Its last command counts through a silence as long as the hold, so
+     * a start rides out a stall; past that the starter lets go with the phone.
+     */
+    isStarterHeld: () => snapshot.owner === "phone" && holding() && latest!.frame.starter === 1,
+    /** The phone flies together with this computer, whose own controls stay live. */
+    isBlending: blending,
+    /** The gesture movement to draw this frame, if any is owed. */
+    takeCameraAim(): CameraAim | null {
+      const movement = aim.take(now());
+      return snapshot.owner === "phone" ? movement : null;
+    },
+    /** Movement has arrived that a later frame still has to draw: keep frames coming. */
+    hasPendingCameraAim: () => snapshot.owner === "phone" && aim.pending(),
+    /** Whether a gesture is still in progress, so auto-recenter can wait for it. */
+    isCameraActive: () => snapshot.owner === "phone" && (now() - aim.lastMovementAt() <= STALE_MS || aim.pending()),
+    onHidden() { revoke("Desktop hidden · Simulation paused", true); },
+    /** The phone controller's settings changed here: tell a phone that keeps them here. */
+    syncPhoneSettings,
+    /**
+     * Presentation only. Replaces any unsent pulse; 0 asks the phone to stop.
+     * Ignored unless the phone currently owns control of this epoch.
+     */
+    setHapticFeedback(pulseMs: number) {
+      if (disposed || !active || snapshot.owner !== "phone" || !Number.isFinite(pulseMs)) { feedback = null; return; }
+      feedback = { id: ++feedbackId, epoch, queuedAt: now(),
+        pulseMs: Math.round(Math.min(MAX_HAPTIC_PULSE_MS, Math.max(0, pulseMs))) };
+    },
+    destroy() {
+      if (disposed) return;
+      disconnect(); disposed = true; clearInterval(timer); listeners.clear();
+    },
+  };
+}
+export type PhoneControlSession = ReturnType<typeof createPhoneControlSession>;
