@@ -230,7 +230,7 @@ describe('phone controller screen', () => {
     expect([...grid().children].map(describe)).toEqual([
       'IAS', 'ALT', 'HDG', 'G', expect.stringContaining('PHONE'), 'Pause simulation', 'Release',
       'Haptics', 'phone-sheet phone-diagnostics', '120Hz120 control frames a second', 'phone-sheet phone-settings',
-      expect.stringContaining('brake'),
+      'phone-sheet phone-browser-data', expect.stringContaining('brake'),
     ])
     expect(text('.phone-diagnostics .phone-sheet__chip')).toBe('🌐 20ms')
   })

@@ -1,5 +1,6 @@
 import { useState } from 'react'
 import { PhoneQrScanner } from './PhoneQrScanner'
+import { PhoneBrowserData } from './PhoneBrowserData'
 
 /**
  * The controller with no invitation: a reload after pairing, a link that was
@@ -14,6 +15,7 @@ export function PhoneUnpaired({ onPair }: { onPair(url: string): void }) {
     <p>Each QR pairs once, so this controller needs a new one. Open the <strong>Remote Control</strong> tab on the computer and scan its QR.</p>
     <button type="button" className="phone-empty-scan" onClick={() => setScanning(true)}>Scan QR code</button>
     <p className="phone-empty-hint">Keep both devices on the same non-guest Wi-Fi for the best connection.</p>
+    <PhoneBrowserData />
     {scanning && <PhoneQrScanner onScan={onPair} onClose={() => setScanning(false)} />}
   </main>
 }

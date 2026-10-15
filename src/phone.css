@@ -476,6 +476,8 @@ button { touch-action: manipulation; }
   margin: 0 -12px; padding: 0 12px;
   background: #000; border-bottom: 1px solid var(--ctl-line);
 }
+.phone-browser-data[open] .foss-earth-browser-data { margin-top: 12px; color: var(--phone-text); }
+.phone-browser-data[open] .foss-earth-choice { min-height: 44px; }
 
 .phone-settings__option { margin: 12px 0 0; padding: 10px 12px 12px; border: 1px solid var(--ctl-line); border-radius: 8px; color: var(--phone-text); }
 .phone-settings__option legend { padding: 0 4px; font-weight: 700; letter-spacing: 0.04em; }

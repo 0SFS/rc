@@ -107,6 +107,7 @@
     "./package.json": "./package.json"
   },
   "peerDependencies": {
+    "@foss-earth/ui": "0.1.0",
     "@0sfs/controls": "0.1.0",
     "@0sfs/engines": "0.1.0",
     "foss-earth": "0.1.0",
@@ -117,6 +118,9 @@
     "react-dom": "19.2.6"
   },
   "peerDependenciesMeta": {
+    "@foss-earth/ui": {
+      "optional": true
+    },
     "@0sfs/controls": {
       "optional": true
     },

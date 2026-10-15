@@ -11,6 +11,7 @@ import { PhoneSettings } from "./PhoneSettings";
 import { PhoneYaw } from "./PhoneYaw";
 import type { GridPosition, YawSettings } from "./phoneSettingsStore";
 import { ConnectionDiagnosticsPanel } from "./ConnectionDiagnosticsPanel";
+import { PhoneBrowserData } from "./PhoneBrowserData";
 import "./styles/flightControls.css";
 import "./phone.css";
 
@@ -173,6 +174,7 @@ export function PhoneController({ client, onPair }: { client: PhoneControllerCli
         </span>
         <PhoneFullscreenButton offer={fullscreen} />
         <PhoneSettings gridPosition={gridPosition} onGridPositionChange={moveGrid} yaw={yaw} onYawChange={changeYaw} />
+        <PhoneBrowserData />
         {/* Last in the grid. A chip like the rest, held rather than tapped. */}
         <PhoneBrake disabled={locked} onChange={brake} />
       </div>
