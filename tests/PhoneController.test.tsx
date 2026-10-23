@@ -26,6 +26,7 @@ let container: HTMLDivElement
 let storage: Map<string, string>
 const nudgeCamera = vi.fn()
 const updateControls = vi.fn()
+const updatePower = vi.fn()
 const setPaused = vi.fn(() => true)
 const setHapticsEnabled = vi.fn()
 /** The client keeps the settings; this one keeps them the way it does, for the screen to follow. */
@@ -51,7 +52,7 @@ function mount({ engine, status, snapshot, onPair }: {
     airspeedKts: 148, altitudeFt: 4250, headingDeg: 271, gearDown: true, ...(engine ? { engine } : {}), ...status,
   }
   state = {
-    phase: 'ready', message: 'Phone controls', status: aircraft, controls: { ...NEUTRAL_CONTROLS },
+    phase: 'ready', message: 'Phone controls', status: aircraft, controls: { ...NEUTRAL_CONTROLS }, leverBrake: 0,
     canFly: false, canControl: true, requestingControl: false, hostFresh: true, lostMs: null, signalingAvailable: true,
     pendingActions: 0, rttMs: 20, sendHz: 120, diagnostics: null, appliedSeq: 1, receiveToApplyMs: 2,
     hapticsSupported: true, hapticsEnabled: false, settings: { ...DEFAULT_PHONE_SETTINGS }, ...snapshot,
@@ -60,7 +61,7 @@ function mount({ engine, status, snapshot, onPair }: {
     log: createConnectionLog('phone', () => 0),
     subscribe: listener => { listeners.add(listener); return () => { listeners.delete(listener) } },
     getSnapshot: () => state,
-    updateControls, nudgeCamera, cancelTransientControls: vi.fn(), requestControl,
+    updateControls, updatePower, nudgeCamera, cancelTransientControls: vi.fn(), requestControl,
     setPaused, setViewMode, setGearDown: () => true, setStarterHeld, shutdownEngine, releaseControl: () => true,
     setHapticsEnabled, updateSettings, destroy: vi.fn(),
   }
@@ -99,6 +100,7 @@ beforeEach(() => {
   })
   nudgeCamera.mockClear()
   updateControls.mockClear()
+  updatePower.mockClear()
   setPaused.mockClear()
   setHapticsEnabled.mockClear()
   updateSettings.mockClear()
@@ -189,6 +191,42 @@ describe('phone controller screen', () => {
     const slider = lever.querySelector<HTMLElement>('[data-control="throttle"]')!
     act(() => { slider.dispatchEvent(new KeyboardEvent('keydown', { key: 'PageUp', bubbles: true })) })
     expect(updateControls).toHaveBeenLastCalledWith({ throttle: 0.1 })
+  })
+
+  it('uses the host combined lever capability and draws the selected lever brake independently of the hold button', () => {
+    mount({ status: { throttleBrakeRange: true },
+      snapshot: { controls: { ...NEUTRAL_CONTROLS, brake: 1 }, leverBrake: .4 } })
+    const lever = container.querySelector<HTMLElement>('.phone-throttle')!
+    expect(lever.querySelector('span')?.textContent).toBe('BRK')
+    expect(lever.querySelector('output')?.value).toBe('40%')
+    const slider = lever.querySelector<HTMLElement>('[data-control="throttle"]')!
+    act(() => { slider.dispatchEvent(new KeyboardEvent('keydown', { key: 'Home', bubbles: true })) })
+    expect(updatePower).toHaveBeenLastCalledWith({ throttle: 0, brake: 1 })
+    act(() => { slider.dispatchEvent(new KeyboardEvent('keydown', { key: 'End', bubbles: true })) })
+    expect(updatePower).toHaveBeenLastCalledWith({ throttle: 1, brake: 0 })
+    // A later host capability change restores a conventional throttle.
+    act(() => {
+      state = { ...state, status: { ...state.status!, throttleBrakeRange: false } }
+      for (const listener of listeners) listener()
+    })
+    updatePower.mockClear()
+    act(() => { slider.dispatchEvent(new KeyboardEvent('keydown', { key: 'Home', bubbles: true })) })
+    expect(updateControls).toHaveBeenLastCalledWith({ throttle: 0 })
+    expect(updatePower).not.toHaveBeenCalled()
+  })
+
+  it.each([undefined, false, true])('uses the host keepSliderBrakes=%s setting for pointer and key release', keepSliderBrakes => {
+    mount({ status: { throttleBrakeRange: true, keepSliderBrakes } })
+    const slider = container.querySelector<HTMLElement>('.phone-throttle [data-control="throttle"]')!
+    pointer(slider, 'pointerdown', { clientY: 200 })
+    pointer(slider, 'pointermove', { clientY: 201 })
+    expect(updatePower).toHaveBeenLastCalledWith({ throttle: 0, brake: 1 })
+    pointer(slider, 'pointerup', { clientY: 201 })
+    expect(updatePower).toHaveBeenLastCalledWith({ throttle: 0, brake: keepSliderBrakes ? 1 : 0 })
+    act(() => { slider.dispatchEvent(new KeyboardEvent('keydown', { key: 'Home', bubbles: true })) })
+    expect(updatePower).toHaveBeenLastCalledWith({ throttle: 0, brake: 1 })
+    act(() => { slider.dispatchEvent(new KeyboardEvent('keyup', { key: 'Home', bubbles: true })) })
+    expect(updatePower).toHaveBeenLastCalledWith({ throttle: 0, brake: keepSliderBrakes ? 1 : 0 })
   })
 
   it('puts nothing above the controls for a lost link: the 🌐 chip counts how long, and the controls stay live', () => {

@@ -129,6 +129,83 @@ async function setup(clientOptions: Partial<Parameters<typeof createPhoneControl
 }
 
 describe('phone controller', () => {
+  it('keeps the throttle lever brake applied and max-mixes the separate hold button', async () => {
+    const h = await setup()
+    h.state.throttleBrakeRange = true
+    await advance(50)
+    await h.fly()
+    h.client.updatePower({ throttle: 0, brake: .35 })
+    await advance(100)
+    expect(h.client.getSnapshot()).toMatchObject({ controls: { throttle: 0 }, leverBrake: .35 })
+    expect(h.host.beforeStep(h.state.controls)).toMatchObject({ throttle: 0, brake: .35 })
+    h.client.updateControls({ brake: 1 })
+    await advance(20)
+    expect(h.host.beforeStep(h.state.controls).brake).toBe(1)
+    // Moving the lever under a held button changes the underlying setting,
+    // while the held button continues to apply full brakes.
+    h.client.updatePower({ throttle: 0, brake: .6 })
+    await advance(20)
+    expect(h.host.beforeStep(h.state.controls).brake).toBe(1)
+    expect(h.client.getSnapshot().leverBrake).toBe(.6)
+    h.client.updateControls({ brake: 0 })
+    await advance(20)
+    expect(h.host.beforeStep(h.state.controls).brake).toBe(.6)
+    h.client.updatePower({ throttle: .4, brake: 0 })
+    await advance(20)
+    expect(h.host.beforeStep(h.state.controls)).toMatchObject({ throttle: .4, brake: 0 })
+  })
+
+  it.each(['blur', 'pagehide', 'orientationchange'])('clears both brake sources on %s and does not reapply them on button release', async event => {
+    const h = await setup()
+    h.state.throttleBrakeRange = true
+    await advance(50)
+    await h.fly()
+    h.client.updatePower({ throttle: 0, brake: .6 })
+    h.client.updateControls({ brake: 1 })
+    await advance(20)
+    expect(h.host.beforeStep(h.state.controls).brake).toBe(1)
+    h.win.dispatchEvent(new Event(event))
+    h.client.updateControls({ brake: 0 })
+    await advance(20)
+    expect(h.client.getSnapshot()).toMatchObject({ controls: { brake: 0 }, leverBrake: 0 })
+    expect(h.host.beforeStep(h.state.controls).brake).toBe(0)
+  })
+
+  it('clears the brake lever on handoff and disconnect, and ignores it on older hosts', async () => {
+    const h = await setup()
+    await advance(50)
+    await h.fly()
+    h.client.updatePower({ throttle: 0, brake: 1 })
+    expect(h.client.getSnapshot().leverBrake).toBe(0)
+    expect(h.client.getSnapshot().controls.throttle).toBe(.67)
+    h.state.throttleBrakeRange = true
+    await advance(50)
+    h.client.updatePower({ throttle: 0, brake: .6 })
+    h.host.takeControl()
+    await advance(50)
+    expect(h.client.getSnapshot().leverBrake).toBe(0)
+    await h.fly()
+    h.client.updatePower({ throttle: 0, brake: .4 })
+    expect(h.client.getSnapshot().leverBrake).toBe(.4)
+    h.phoneLink.close()
+    expect(h.client.getSnapshot()).toMatchObject({ phase: 'disconnected', controls: { brake: 0 }, leverBrake: 0 })
+  })
+
+  it('rejects invalid brake commands before mixing sources', async () => {
+    const h = await setup()
+    h.state.throttleBrakeRange = true
+    await advance(50)
+    await h.fly()
+    for (const brake of [-.1, 1.1, NaN]) {
+      h.client.updateControls({ brake })
+      h.client.updatePower({ throttle: 0, brake })
+    }
+    h.client.updatePower({ throttle: .5, brake: .5 })
+    await advance(20)
+    expect(h.host.beforeStep(h.state.controls)).toMatchObject({ throttle: .67, brake: 0 })
+    expect(h.client.getSnapshot().leverBrake).toBe(0)
+  })
+
   it('boots with the real host, hands off centered settings, streams input, retakes control, pauses and releases', async () => {
     const h = await setup()
     expect(h.client.getSnapshot()).toMatchObject({ phase: 'ready', canFly: false, canControl: false })
@@ -575,6 +652,24 @@ describe('phone controller', () => {
     await advance(100)
     expect(h.client.getSnapshot().controls.throttle).toBe(.2)
     expect(h.phoneLink.last('controls').controls.throttle).toBe(.2)
+  })
+
+  it('blending: a desktop transient brake never becomes this phone lever brake', async () => {
+    const h = await setup({}, { getSharing: () => ({ ...DEFAULT_CONTROL_SHARING, mode: 'blend', priority: 'phone' }) })
+    h.state.throttleBrakeRange = true
+    await advance(50)
+    await h.fly()
+    h.state.controls = { ...h.state.controls, throttle: .9, brake: 1 }
+    h.host.beforeStep(h.state.controls)
+    await advance(100)
+    expect(h.client.getSnapshot().controls.throttle).toBe(.9)
+    expect(h.client.getSnapshot().leverBrake).toBe(0)
+    expect(h.phoneLink.last('controls').controls.brake).toBe(0)
+    h.state.controls = { ...h.state.controls, brake: 0 }
+    h.host.beforeStep(h.state.controls)
+    await advance(100)
+    expect(h.client.getSnapshot().leverBrake).toBe(0)
+    expect(h.phoneLink.last('controls').controls.brake).toBe(0)
   })
 
   it('one device at a time, the levers stay where this phone put them', async () => {

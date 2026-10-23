@@ -53,6 +53,28 @@ const accepted: RemoteMessage[] = [
 ];
 
 describe("phone protocol parsing", () => {
+  it("accepts the optional throttle brake range without requiring it from older hosts", () => {
+    for (const throttleBrakeRange of [undefined, false, true]) {
+      expect(parseMessage({ ...envelope, type: "heartbeat", lease: 1,
+        status: { ...status, throttleBrakeRange } })).not.toBeNull();
+    }
+    for (const throttleBrakeRange of [null, 1, "yes"]) {
+      expect(parseMessage({ ...envelope, type: "heartbeat", lease: 1,
+        status: { ...status, throttleBrakeRange } })).toBeNull();
+    }
+  });
+
+  it("accepts the optional brake retention setting and rejects nonboolean values", () => {
+    for (const keepSliderBrakes of [undefined, false, true]) {
+      expect(parseMessage({ ...envelope, type: "heartbeat", lease: 1,
+        status: { ...status, keepSliderBrakes } })).not.toBeNull();
+    }
+    for (const keepSliderBrakes of [null, 1, "yes"]) {
+      expect(parseMessage({ ...envelope, type: "heartbeat", lease: 1,
+        status: { ...status, keepSliderBrakes } })).toBeNull();
+    }
+  });
+
   it("accepts an optional six-digit aircraft afterburner accent and rejects arbitrary colors", () => {
     for (const afterburnerColor of [undefined, "#ff9450", "#A0B1C2"]) {
       expect(isEngineStatus({ phase: "RUNNING", afterburnerColor })).toBe(true);

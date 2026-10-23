@@ -22,6 +22,8 @@ export interface PhoneControllerSnapshot {
   message: string
   status: AircraftStatus | null
   controls: ControlSurfaceState
+  /** Brake selected by the combined throttle/brake lever, before the hold button is mixed in. */
+  leverBrake: number
   canFly: boolean
   canControl: boolean
   requestingControl: boolean
@@ -59,6 +61,8 @@ export interface PhoneControllerClient {
   subscribe(listener: () => void): () => void
   getSnapshot(): PhoneControllerSnapshot
   updateControls(controls: Partial<ControlSurfaceState>, input?: InputTiming): void
+  /** Atomic throttle/brake lever movement, enabled only by a host advertising its brake range. */
+  updatePower(command: { throttle: number; brake: number }): void
   /**
    * Adds a camera trackpad gesture — a swipe as a fraction of the pad, a pinch
    * as a spread ratio — to the next control frame. Deltas accumulate until one
@@ -151,12 +155,14 @@ export function createPhoneControllerClient(
   const pending = new Map<number, { action: ActionName; epoch: number; timer: ReturnType<typeof setTimeout> }>()
   let snapshot: PhoneControllerSnapshot = {
     phase: 'connecting', message: 'Connecting to pairing service…', status: null,
-    controls: { ...NEUTRAL_CONTROLS }, canFly: false, canControl: false,
+    controls: { ...NEUTRAL_CONTROLS }, leverBrake: 0, canFly: false, canControl: false,
     requestingControl: false, hostFresh: false, lostMs: null, signalingAvailable: true,
     pendingActions: 0, rttMs: null, sendHz: null, diagnostics: null, appliedSeq: null, receiveToApplyMs: null,
     hapticsSupported: false, hapticsEnabled: false, settings: loadPhoneSettings(null),
   }
   let controls = { ...NEUTRAL_CONTROLS }
+  let leverBrake = 0
+  let transientBrake = 0
   // Held like the brake, but not a flight surface, so it travels beside them.
   let starterHeld = false
   // Gesture movement not yet on the wire. It clears when a frame carrying it is
@@ -320,8 +326,9 @@ export function createPhoneControllerClient(
 
   function adoptControls(next: ControlSurfaceState): void {
     controls = neutralize(next)
+    leverBrake = transientBrake = 0
     starterHeld = false
-    snapshot = { ...snapshot, controls: { ...controls } }
+    snapshot = { ...snapshot, controls: { ...controls }, leverBrake }
   }
 
   function advanceEpoch(nextEpoch: number, preserveRequest = false): void {
@@ -378,6 +385,8 @@ export function createPhoneControllerClient(
 
   /** Blending: the levers go where the computer has them. True when one moved. */
   function followLevers(from: ControlSurfaceState): boolean {
+    // Host brakes include transient buttons and both pilots' input. They
+    // cannot identify where this phone's lever was placed.
     if (LEVERS.every(key => controls[key] === from[key])) return false
     controls = { ...controls, throttle: from.throttle, pitchTrim: from.pitchTrim, rollTrim: from.rollTrim, flaps: from.flaps }
     return true
@@ -454,7 +463,7 @@ export function createPhoneControllerClient(
     clearPending()
     authorityEpoch = -1
     stopVibration()
-    controls = neutralize(controls)
+    adoptControls(controls)
     releaseWakeLock()
     stopRuntime()
     stopTransport()
@@ -536,6 +545,11 @@ export function createPhoneControllerClient(
     if (!authoritative && snapshot.status) status = { ...status, owner: snapshot.status.owner }
     // Telemetry must never drag a live slider/stick back to the previous frame.
     if (status.owner === 'local' && handoffEpoch === null) adoptControls(status.controls)
+    if (!status.throttleBrakeRange && leverBrake > 0) {
+      leverBrake = 0
+      controls = { ...controls, brake: transientBrake }
+      snapshot = { ...snapshot, controls: { ...controls }, leverBrake }
+    }
     snapshot = { ...snapshot, status }
     if (!ownsControl()) stopVibration()
   }
@@ -802,19 +816,33 @@ export function createPhoneControllerClient(
     fail('This browser could not start phone control. Try a current Safari or Chrome browser.', false, 'peer-unsupported')
   }
 
+  function updateControls(partial: Partial<ControlSurfaceState>, input?: InputTiming, powerBrake?: number): void {
+    if (!snapshot.canControl || finished) return
+    if (!isControls({ ...controls, ...partial })) return
+    const nextLeverBrake = powerBrake ?? leverBrake
+    const nextTransientBrake = powerBrake === undefined ? partial.brake ?? transientBrake : transientBrake
+    const next = { ...controls, ...partial, brake: Math.max(nextLeverBrake, nextTransientBrake) }
+    if (!isControls(next)) return
+    if (LEVERS.some(key => next[key] !== controls[key]) || nextLeverBrake !== leverBrake) leverMoveSeq = sequence
+    leverBrake = nextLeverBrake
+    transientBrake = nextTransientBrake
+    controls = next
+    if (traceRequested && input) traceInput(traceCtl, [input.at, now()])
+    if (powerBrake !== undefined || RENDERED_CONTROLS.some(key => partial[key] !== undefined)) {
+      emit({ controls: { ...controls }, leverBrake })
+    }
+    inputChanged()
+  }
+
   return {
     log,
     subscribe(listener) { listeners.add(listener); return () => { listeners.delete(listener) } },
     getSnapshot: () => snapshot,
-    updateControls(partial, input) {
-      if (!snapshot.canControl || finished) return
-      const next = { ...controls, ...partial }
-      if (!isControls(next)) return
-      if (LEVERS.some(key => next[key] !== controls[key])) leverMoveSeq = sequence
-      controls = next
-      if (traceRequested && input) traceInput(traceCtl, [input.at, now()])
-      if (RENDERED_CONTROLS.some(key => partial[key] !== undefined)) emit({ controls: { ...controls } })
-      inputChanged()
+    updateControls,
+    updatePower(command) {
+      if (snapshot.status?.throttleBrakeRange !== true || !Number.isFinite(command.brake)
+        || command.brake < 0 || command.brake > 1 || (command.throttle > 0 && command.brake > 0)) return
+      updateControls({ throttle: command.throttle }, undefined, command.brake)
     },
     nudgeCamera(delta, input) {
       if (!snapshot.canControl || finished || !isCameraAim(delta) || !isAiming(delta)) return

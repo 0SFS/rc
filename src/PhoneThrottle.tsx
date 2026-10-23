@@ -9,22 +9,27 @@ import type { EngineStatus } from './protocol'
  * sends the intents the desktop's lever acts on, over the control channel.
  * A host that reports no engine `state` gets a plain throttle.
  */
-export function PhoneThrottle({ value, engine, disabled, onChange, onStartHold, onShutdown }: {
+export function PhoneThrottle({ value, brake, brakeRange, keepBrakes, engine, disabled, onChange, onPowerChange, onStartHold, onShutdown }: {
   value: number
+  brake: number
+  brakeRange: boolean
+  keepBrakes: boolean
   engine: EngineStatus | undefined
   disabled: boolean
   onChange(value: number): void
+  onPowerChange(command: { throttle: number; brake: number }): void
   onStartHold(held: boolean): void
   onShutdown(): void
 }) {
   const box = useRef<HTMLDivElement>(null)
   const lever = useRef<ThrottleLeverHandle | null>(null)
   const held = useRef(false)
-  const handlers = useRef({ onChange, onStartHold, onShutdown })
-  useEffect(() => { handlers.current = { onChange, onStartHold, onShutdown } })
+  const handlers = useRef({ onChange, onPowerChange, onStartHold, onShutdown })
+  useEffect(() => { handlers.current = { onChange, onPowerChange, onStartHold, onShutdown } })
   useEffect(() => {
     const created = createThrottleLever(box.current!, {
       onThrottleChange: next => handlers.current.onChange(next),
+      onPowerChange: next => handlers.current.onPowerChange(next),
       onStartHold: next => { held.current = next; handlers.current.onStartHold(next) },
       onShutdown: () => handlers.current.onShutdown(),
     })
@@ -37,10 +42,13 @@ export function PhoneThrottle({ value, engine, disabled, onChange, onStartHold, 
   useEffect(() => {
     lever.current?.update({
       throttle: value,
+      brake,
+      brakeRange,
+      keepBrakes,
       engine: state === undefined ? null : { state, startProgress: start, blocked },
       disabled,
     })
-  }, [value, state, start, blocked, disabled])
+  }, [value, brake, brakeRange, keepBrakes, state, start, blocked, disabled])
   // Engine off, the lever rests at idle, and so does the throttle this phone sends.
   useEffect(() => {
     if (state === 'stopped' && value > 0 && !held.current) handlers.current.onChange(0)

@@ -304,10 +304,35 @@
 .flight-throttle__fill {
   position: absolute;
   right: 0;
-  bottom: 0;
+  bottom: calc(var(--throttle-fill-start, 0) * 100%);
   left: 0;
-  height: calc(var(--throttle-value) * 100%);
+  height: calc(var(--throttle-fill-size, var(--throttle-value)) * 100%);
   background: var(--ctl-accent);
+}
+
+/* The lower fifth is brakes; the cross-mark is throttle idle and brake release. */
+[data-brake-range="true"] .flight-throttle__track {
+  background: linear-gradient(to top, color-mix(in srgb, var(--ctl-danger) 45%, transparent) 20%, var(--ctl-line-strong) 20%);
+}
+
+.flight-throttle__idle {
+  display: none;
+  position: absolute;
+  bottom: calc(20% + var(--throttle-handle) * 0.3);
+  left: 0;
+  width: 100%;
+  height: 2px;
+  background: var(--ctl-line-strong);
+  pointer-events: none;
+}
+
+[data-brake-range="true"] .flight-throttle__idle {
+  display: block;
+}
+
+[data-power="brake"] .flight-throttle__fill,
+[data-power="brake"] .flight-throttle__handle {
+  background: var(--ctl-danger);
 }
 
 .flight-throttle__handle {
@@ -374,11 +399,11 @@
   cursor: pointer;
 }
 
-[data-engine="stopped"]:not([data-hold]) .flight-throttle__handle {
+[data-engine="stopped"]:not([data-hold]):not([data-power="brake"]) .flight-throttle__handle {
   background: var(--ctl-muted);
 }
 
-[data-engine="stopped"]:not([data-hold]) output {
+[data-engine="stopped"]:not([data-hold]):not([data-power="brake"]) output {
   color: var(--ctl-danger);
   opacity: 1;
 }
