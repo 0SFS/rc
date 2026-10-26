@@ -24,7 +24,7 @@ const PHONE_CONTROLLER = { tab: "remote", section: "phone" } as const;
 
 /** Section titles for the sections only the phone remote control's parameters are in, by tab and section id. */
 export const REMOTE_CONTROL_SECTION_TITLES: readonly (readonly [tab: string, section: string, title: string])[] = [
-  ["remote", "control", "Who flies"],
+  ["remote", "control", "Shared controls"],
   ["remote", "phone", "Phone controller"],
   ["remote", "camera", "Phone camera trackpad"],
 ];
@@ -51,85 +51,23 @@ export const REMOTE_CONTROL_PARAMETERS = [
     source: "src/flight/createFlightSimApp.ts",
   },
 
-  // Remote Control → Who flies: how control passes between a paired phone and
-  // this computer. Spec: docs/proposals/phone-controller.md → Sharing the controls.
-  {
-    id: "osfs.remote.sharing",
-    label: "Sharing the controls",
-    description: "Whether one device flies at a time, or a phone that has taken control flies together with this computer.",
-    unit: "none",
-    kind: "choice",
-    choices: [
-      { id: "exclusive", label: "One device at a time", description: "Only the device with control moves the aircraft. Control changes hands says when it passes." },
-      { id: "blend", label: "Blend both", description: "Both devices fly at once. Where both move a control, Blend priority wins and the other has what it leaves free; a lever goes where it was last moved." },
-    ],
-    default: "exclusive",
-    defaultReason: "One pilot at a time, as the controller was designed; blending is for two pilots who mean to share.",
-    home: main(REMOTE_CONTROL),
-    appliesLive: true,
-    source: "rc/src/createPhoneControlSession.ts",
-  },
+  // Take control changes input priority. Both devices remain active; old
+  // exclusive/handover/hold settings are no longer registered or read.
   {
     id: "osfs.remote.blendPriority",
-    label: "Blend priority",
-    description: "With Blend both: whose input wins where both devices move the same control. Full deflection on that device is all of the control.",
+    label: "Control priority",
+    description: "Both devices can fly. Take control on either screen gives that device priority when inputs conflict. Typing or moving controls does not change priority. A phone leaves only after more than five seconds without valid input, a connection failure, or an explicit disconnect.",
     unit: "none",
     kind: "choice",
     choices: [
-      { id: "phone", label: "Phone", description: "The phone's input wins; this computer's fills in around it." },
-      { id: "computer", label: "This computer", description: "This computer's input wins, as an instructor's would; the phone's fills in around it." },
+      { id: "phone", label: "Phone", description: "The phone has priority; this computer's input fills in around it." },
+      { id: "computer", label: "This computer", description: "This computer has priority; the phone stays active and fills in around it." },
     ],
     default: "phone",
-    defaultReason: "The phone is the remote being flown; this computer's input fills in around it.",
+    defaultReason: "Taking control on the remote gives the phone priority without disabling the host's input.",
     home: main(REMOTE_CONTROL),
     appliesLive: true,
     source: "rc/src/controlBlend.ts",
-  },
-  {
-    id: "osfs.remote.handover",
-    label: "Control changes hands",
-    description: "Which device flies when both the phone and this computer could. Take control in this tab always takes it here on purpose.",
-    unit: "none",
-    kind: "choice",
-    choices: [
-      { id: "auto", label: "Automatically", description: "Flight input here takes control. It goes back to the phone as soon as these controls rest, this tab is showing and the phone is heard from." },
-      { id: "stay", label: "Only when taken", description: "Whichever device has control keeps it until the other takes it: flight input here, or Take control on the phone." },
-      { id: "phone", label: "Latched to the phone", description: "The phone flies whenever it is heard from. Flight input here does not take control from it." },
-      { id: "computer", label: "Latched to this computer", description: "This computer flies. The phone cannot take control." },
-    ],
-    default: "auto",
-    defaultReason: "A remote that has to be taken back by hand after every stray key, hidden tab or dropped frame cannot be flown.",
-    home: main(REMOTE_CONTROL),
-    appliesLive: true,
-    source: "rc/src/createPhoneControlSession.ts",
-  },
-  {
-    id: "osfs.remote.returnIdle",
-    label: "Rest before returning",
-    description: "With Automatically: how long this computer's flight controls must rest before control goes back to the phone.",
-    unit: "s",
-    kind: "number",
-    step: 0.1,
-    bounds: within(0, 10),
-    default: 1,
-    defaultReason: "Long enough that keys tapped here keep control between taps; short enough that a stray touch hands it straight back.",
-    home: main(REMOTE_CONTROL),
-    appliesLive: true,
-    source: "rc/src/createPhoneControlSession.ts",
-  },
-  {
-    id: "osfs.remote.holdLast",
-    label: "Hold the phone's last command",
-    description: "When the phone's input stops arriving, how long its last command stands — a held starter, stick or brake stays held — before they let go and control comes back here. This computer stalling does not count.",
-    unit: "s",
-    kind: "number",
-    step: 0.1,
-    bounds: within(0, 10),
-    default: 2,
-    defaultReason: "Rides out a Wi-Fi stall or a busy phone, so an engine start or a turn carries on through it; short enough that a phone that is really gone does not fly a deflected stick for long.",
-    home: main(REMOTE_CONTROL),
-    appliesLive: true,
-    source: "rc/src/createPhoneControlSession.ts",
   },
 
   // Remote Control → Phone camera trackpad: how a phone's swipe reaches the

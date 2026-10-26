@@ -350,24 +350,52 @@ describe('desktop phone control session', () => {
     expect(h.session.getSnapshot().owner).toBe('local')
     transport.receiveNative({ v: 1, type: 'controls', session: handoff.session, epoch: handoff.epoch, seq: 1, lease: handoff.lease, controls: baseline })
     expect(h.session.getSnapshot().owner).toBe('phone')
-    expect(h.ownership).toHaveBeenCalledWith('phone', baseline, false)
+    expect(h.ownership).toHaveBeenCalledWith('phone', baseline, true)
     expect(h.state.paused).toBe(true)
     expect(h.pause).not.toHaveBeenCalled()
   })
 
-  it.each(['throttle', 'pause', 'local', 'timeout'] as const)('cancels handoff on %s changes before ownership', async (change) => {
+  it.each(['pause', 'timeout'] as const)('cancels handoff on %s changes before ownership', async (change) => {
     const h = setup()
     const transport = await h.pair()
     const handoff = h.requestControl(transport)
-    if (change === 'throttle') h.state.controls.throttle = .2
     if (change === 'pause') h.state.paused = true
-    if (change === 'local') h.setLocalActive(true)
     await h.advance(change === 'timeout' ? 2000 : 50)
     transport.receive({ v: 1, type: 'handoffAck', session: handoff.session, epoch: handoff.epoch, requestId: handoff.requestId })
     transport.receiveNative({ v: 1, type: 'controls', session: handoff.session, epoch: handoff.epoch, seq: 0, lease: handoff.lease, controls: handoff.controls })
     expect(h.session.getSnapshot().owner).toBe('local')
     expect(h.ownership).not.toHaveBeenCalled()
     expect(transport.last('ack').ok).toBe(false)
+  })
+
+  it.each(['throttle', 'pitchTrim', 'rollTrim', 'flaps'] as const)('preserves handoff through passive %s changes when local input is unchanged', async key => {
+    const h = setup({ getLocalInputRevision: () => 0 })
+    const transport = await h.pair()
+    const handoff = h.requestControl(transport)
+    h.state.controls[key] = .2
+    await h.advance(50)
+    transport.receive({ v: 1, type: 'handoffAck', session: handoff.session, epoch: handoff.epoch, requestId: handoff.requestId })
+    transport.receiveNative({ v: 1, type: 'controls', session: handoff.session, epoch: handoff.epoch, seq: 0, lease: handoff.lease, controls: handoff.controls })
+    expect(h.session.getSnapshot().owner).toBe('phone')
+    expect(transport.last('granted')).toMatchObject({ epoch: handoff.epoch, requestId: handoff.requestId })
+    expect(h.ownership).toHaveBeenCalledWith('phone', handoff.controls, true)
+  })
+
+  it('keeps the phone handoff live when local controls move or advance their revision', async () => {
+    let revision = 0
+    const h = setup({ getLocalInputRevision: () => revision })
+    const transport = await h.pair()
+    const handoff = h.requestControl(transport)
+    revision++
+    h.setLocalActive(true)
+    h.state.controls.aileron = .7
+    h.state.controls.throttle = .2
+    h.session.noteLocalInput()
+    await h.advance(50)
+    transport.receive({ v: 1, type: 'handoffAck', session: handoff.session, epoch: handoff.epoch, requestId: handoff.requestId })
+    transport.receiveNative({ v: 1, type: 'controls', session: handoff.session, epoch: handoff.epoch, seq: 0, lease: handoff.lease, controls: handoff.controls })
+    expect(h.session.getSnapshot().owner).toBe('phone')
+    expect(h.ownership).toHaveBeenCalledWith('phone', handoff.controls, true)
   })
 
   it('rejects reordered, duplicate, malformed and old-epoch controls before replacing the mailbox', async () => {
@@ -384,7 +412,7 @@ describe('desktop phone control session', () => {
       { ...frame, seq: 3, lease: 999999, controls: { ...frame.controls, elevator: -.8 } },
     ]) transport.receiveNative(bad)
     expect(h.session.beforeStep(h.state.controls)).toMatchObject({ elevator: .8 })
-    h.session.takeControl()
+    h.session.reset()
     transport.receiveNative({ ...frame, seq: 100 })
     expect(h.session.getSnapshot().owner).toBe('local')
     expect(h.state.controls).toMatchObject({ elevator: 0, throttle: .67, pitchTrim: -.12, flaps: 1 / 3 })
@@ -429,10 +457,10 @@ describe('desktop phone control session', () => {
     expect(h.session.getSnapshot().owner).toBe('phone')
     expect(h.session.beforeStep(h.state.controls)).toMatchObject({ elevator: .2 })
     // Past the hold, control comes back here, without a pause.
-    for (let seq = 41; seq <= 50; seq++) { await h.advance(50); frame(seq, .9) }
+    for (let seq = 41; seq <= 105; seq++) { await h.advance(50); frame(seq, .9) }
     expect(h.session.getSnapshot()).toMatchObject({ phase: 'paired', owner: 'local' })
     expect(h.pause).not.toHaveBeenCalled()
-    frame(100, .9)
+    frame(110, .9)
     expect(h.session.getSnapshot().owner).toBe('local')
   })
 
@@ -449,7 +477,7 @@ describe('desktop phone control session', () => {
     h.setVisible(false)
     expect(h.session.beforeStep(h.state.controls)).toBe(false)
     expect(h.pause).toHaveBeenCalledWith(true)
-    expect(h.session.getSnapshot().owner).toBe('local')
+    expect(h.session.getSnapshot().owner).toBe('phone')
   })
 
   it('never takes a stall of this computer for silence from the phone', async () => {
@@ -467,7 +495,7 @@ describe('desktop phone control session', () => {
     expect(h.session.isStarterHeld()).toBe(true)
     h.jump(5000)
     await h.advance(100)
-    expect(h.session.getSnapshot()).toMatchObject({ owner: 'phone', message: 'Phone controls' })
+    expect(h.session.getSnapshot()).toMatchObject({ owner: 'phone', message: 'Phone priority · Both devices connected' })
     expect(h.session.isStarterHeld()).toBe(true)
     expect(h.pause).not.toHaveBeenCalled()
   })
@@ -485,26 +513,25 @@ describe('desktop phone control session', () => {
     send(1, .3)
     // Nothing for a second and a half: the pilot still holds the starter and the stick.
     await h.advance(1500)
-    expect(h.session.getSnapshot()).toMatchObject({ owner: 'phone', message: 'Phone controls · Phone signal lost · Holding its last command' })
+    expect(h.session.getSnapshot()).toMatchObject({ owner: 'phone', message: 'Phone priority · Both devices connected · Phone signal lost · Holding its last command' })
     expect(h.session.beforeStep(h.state.controls)).toMatchObject({ aileron: .3 })
     expect(h.session.isStarterHeld()).toBe(true)
     // Heard again: it flies on in the same epoch, with no handoff and no pause.
     send(2, .1)
     await h.advance(50)
-    expect(h.session.getSnapshot()).toMatchObject({ owner: 'phone', message: 'Phone controls' })
+    expect(h.session.getSnapshot()).toMatchObject({ owner: 'phone', message: 'Phone priority · Both devices connected' })
     expect(h.session.beforeStep(h.state.controls)).toMatchObject({ aileron: .1 })
     expect(h.session.log.entries().at(-1)).toMatchObject({ code: 'phone-silent', detail: expect.stringContaining('its last command held') })
     expect(h.ownership).toHaveBeenCalledTimes(1)
     expect(h.pause).not.toHaveBeenCalled()
-    // The hold is read live: shortened under a silence, it lets go at once,
-    // and control comes back here within a heartbeat, without a pause.
-    await h.advance(1000)
+    // Imported hold settings cannot shorten the fixed five-second loss window.
     h.setSharing({ holdMs: 0 })
-    expect(h.session.beforeStep(h.state.controls)).toMatchObject({ aileron: 0, throttle: handoff.controls.throttle })
-    expect(h.session.isStarterHeld()).toBe(false)
-    await h.advance(50)
+    await h.advance(4950)
+    expect(h.session.getSnapshot().owner).toBe('phone')
+    expect(h.session.isStarterHeld()).toBe(true)
+    await h.advance(100)
     expect(h.session.getSnapshot()).toMatchObject({ owner: 'local', message: 'Phone signal lost · Desktop controls · Back to the phone when it is heard' })
-    expect(h.ownership).toHaveBeenLastCalledWith('local', expect.objectContaining({ aileron: 0, throttle: handoff.controls.throttle }), false)
+    expect(h.ownership).toHaveBeenLastCalledWith('local', expect.objectContaining({ aileron: 0, throttle: handoff.controls.throttle }), true)
     expect(h.pause).not.toHaveBeenCalled()
   })
 
@@ -523,14 +550,13 @@ describe('desktop phone control session', () => {
     expect(transport.last('ack').ok).toBe(false)
   })
 
-  it.each(['disconnect', 'close', 'hide', 'reset', 'release'] as const)('revokes phone control on %s and retains applied persistent settings', async (kind) => {
+  it.each(['disconnect', 'close', 'reset', 'release'] as const)('revokes phone control on %s and retains applied persistent settings', async (kind) => {
     const h = setup()
     const transport = await h.pair()
     const handoff = h.grant(transport)
     h.state.controls = { ...h.state.controls, throttle: .83, pitchTrim: .24, flaps: 2 / 3, elevator: .4, brake: 1 }
     if (kind === 'disconnect') h.session.disconnect()
     if (kind === 'close') transport.close()
-    if (kind === 'hide') h.session.onHidden()
     if (kind === 'reset') h.session.reset()
     if (kind === 'release') transport.receive({ v: 1, type: 'action', session: handoff.session, epoch: handoff.epoch, lease: handoff.lease, id: 2, action: 'releaseControl' })
     expect(h.session.getSnapshot().owner).toBe('local')
@@ -618,11 +644,11 @@ describe('reliable authority status recovery', () => {
     })
     h.session.takeControl()
     expect(statusAttempts).toBe(1)
-    expect(h.session.getSnapshot().owner).toBe('local')
+    expect(h.session.getSnapshot()).toMatchObject({ owner: 'phone', priority: 'computer' })
     h.state.controls.throttle = .91
     await h.advance(50)
     expect(statusAttempts).toBe(2)
-    expect(transport.last('status')).toMatchObject({ status: { owner: 'local', controls: { throttle: .91 } } })
+    expect(transport.last('status')).toMatchObject({ status: { owner: 'phone', blend: 'computer', controls: { throttle: .91 } } })
     await h.advance(200)
     expect(statusAttempts).toBe(2)
     expect(h.pause).not.toHaveBeenCalled()
@@ -642,7 +668,7 @@ describe('reliable authority status recovery', () => {
     await h.advance(50)
     h.session.syncStatus()
     for (let tick = 0; tick < 10; tick++) await h.advance(50)
-    expect(statusAttempts).toBe(8)
+    expect(statusAttempts).toBe(9)
     expect(transport.closed).toBe(true)
     expect(h.session.getSnapshot()).toMatchObject({ phase: 'error', owner: 'local', message: 'Could not synchronize phone controls. Scan a new QR to reconnect.' })
     const attempts = statusAttempts
@@ -660,7 +686,7 @@ describe('reliable authority status recovery', () => {
       transport.reliable.push(message)
       return true
     })
-    h.session.takeControl()
+    h.session.reset()
     await h.advance(50)
     h.grant(transport, 2)
     expect(h.session.getSnapshot().owner).toBe('phone')
@@ -706,218 +732,170 @@ describe('reliable authority status recovery', () => {
   })
 })
 
-describe('handing control back to the phone', () => {
-  /** What the newest status-bearing heartbeat offered the phone. */
+describe('shared input priority and connection lifetime', () => {
   const offered = (transport: Transport) => transport.native
     .findLast((message): message is Extract<RemoteMessage, { type: 'heartbeat' }> => message.type === 'heartbeat' && message.status !== undefined)
     ?.status?.handBack
-  const release = (transport: Transport, handoff: { session: string; epoch: number; lease: number }, id = 2) => {
-    transport.receive({ v: 1, type: 'action', session: handoff.session, epoch: handoff.epoch, lease: handoff.lease, id, action: 'releaseControl' })
-  }
-  /** What a phone does with a grant marked `resume`. */
-  const lift = (transport: Transport, handoff: { session: string; epoch: number; lease: number }, id = 9) => {
-    transport.receive({ v: 1, type: 'action', session: handoff.session, epoch: handoff.epoch, lease: handoff.lease, id, action: 'setPaused', value: false })
+  const action = (transport: Transport, name: 'setPriority' | 'requestControl' | 'releaseControl', id: number, value?: 'phone' | 'computer') => {
+    const heartbeat = transport.last('heartbeat')
+    const handoff = transport.last('handoff')
+    const current = heartbeat.epoch === handoff.epoch ? heartbeat : handoff
+    transport.receive({ v: 1, type: 'action', session: current.session, epoch: current.epoch, lease: current.lease, id, action: name, ...(value === undefined ? {} : { value }) })
   }
 
-  it('gives control back by itself after flight input here, once these controls rest', async () => {
+  it.each(['auto', 'stay', 'phone', 'computer'] as const)('keeps local keys and the phone live regardless of retired %s policy', async handover => {
     const h = setup()
-    const transport = await h.pair()
-    h.grant(transport)
+    h.setSharing({ mode: 'exclusive', handover })
     h.setLocalActive(true)
+    const transport = await h.pair()
+    const handoff = h.grant(transport)
     h.session.noteLocalInput()
-    expect(h.session.getSnapshot()).toMatchObject({ owner: 'local', returning: true })
-    expect(h.pause).not.toHaveBeenCalled()
     await h.advance(100)
-    expect(offered(transport)).toBe('idle')
-    h.setLocalActive(false)
-    await h.advance(500)
-    expect(offered(transport)).toBe('idle')
-    await h.advance(600)
-    expect(offered(transport)).toBe('now')
-    // What a phone does on `now`: the same centred handoff as a tap.
-    h.grant(transport, 2)
-    expect(h.session.getSnapshot()).toMatchObject({ owner: 'phone', returning: false })
+    expect(h.session.getSnapshot()).toMatchObject({ owner: 'phone', priority: 'phone', returning: false })
+    expect(h.session.isBlending()).toBe(true)
+    expect(transport.last('heartbeat').epoch).toBe(handoff.epoch)
+    expect(h.ownership).toHaveBeenCalledTimes(1)
     expect(h.pause).not.toHaveBeenCalled()
   })
 
-  it('resumes the flight that hiding this tab paused, once the tab shows again', async () => {
+  it('changes priority from either device without a new grant, epoch, pause or ownership callback', async () => {
+    let selected: 'phone' | 'computer' = 'computer'
+    const persist = vi.fn((priority: 'phone' | 'computer') => { selected = priority })
+    const h = setup({ getSharing: () => ({ ...DEFAULT_CONTROL_SHARING, priority: selected }), setPriority: persist })
+    const transport = await h.pair()
+    const handoff = h.grant(transport)
+    expect(selected).toBe('phone')
+    h.session.takeControl()
+    expect(h.session.getSnapshot()).toMatchObject({ owner: 'phone', priority: 'computer' })
+    expect(transport.last('status')).toMatchObject({ epoch: handoff.epoch, status: { owner: 'phone', blend: 'computer' } })
+    action(transport, 'setPriority', 2, 'phone')
+    expect(transport.last('ack')).toMatchObject({ id: 2, ok: true, epoch: handoff.epoch, status: { blend: 'phone' } })
+    action(transport, 'setPriority', 3, 'computer')
+    expect(h.session.getSnapshot()).toMatchObject({ owner: 'phone', priority: 'computer' })
+    expect(transport.reliable.filter(message => message.type === 'granted')).toHaveLength(1)
+    expect(h.ownership).toHaveBeenCalledTimes(1)
+    expect(persist.mock.calls.map(([priority]) => priority)).toEqual(['phone', 'computer', 'phone', 'computer'])
+    expect(h.pause).not.toHaveBeenCalled()
+  })
+
+  it('keeps the latest computer priority choice made during the initial phone handoff', async () => {
+    const activeLocalInput = vi.fn(() => true)
+    const h = setup({ hasActiveLocalInput: activeLocalInput })
+    h.state.controls.elevator = .7
+    const transport = await h.pair()
+    const handoff = h.requestControl(transport)
+    h.session.takeControl()
+    h.session.noteLocalInput()
+    await h.advance(50)
+    transport.receive({ v: 1, type: 'handoffAck', session: handoff.session, epoch: handoff.epoch, requestId: handoff.requestId })
+    transport.receiveNative({ v: 1, type: 'controls', session: handoff.session, epoch: handoff.epoch, seq: 0, lease: handoff.lease, controls: handoff.controls })
+    expect(h.session.getSnapshot()).toMatchObject({ owner: 'phone', priority: 'computer' })
+    expect(transport.last('granted')).toMatchObject({ epoch: handoff.epoch, status: { blend: 'computer' } })
+    expect(activeLocalInput()).toBe(true)
+    expect(h.ownership).toHaveBeenCalledWith('phone', handoff.controls, true)
+    expect(h.pause).not.toHaveBeenCalled()
+  })
+
+  it('accepts an older controller request as a priority selection and deduplicates it', async () => {
     const h = setup()
     const transport = await h.pair()
-    h.grant(transport)
+    const handoff = h.grant(transport)
+    h.session.takeControl()
+    action(transport, 'requestControl', 2)
+    action(transport, 'requestControl', 2)
+    expect(transport.last('ack')).toMatchObject({ id: 2, ok: true, epoch: handoff.epoch, status: { blend: 'phone' } })
+    expect(h.ownership).toHaveBeenCalledTimes(1)
+    expect(transport.reliable.filter(message => message.type === 'handoff')).toHaveLength(1)
+  })
+
+  it('pauses a hidden host while retaining the phone and its epoch, then lets the phone resume', async () => {
+    const h = setup()
+    const transport = await h.pair()
+    const handoff = h.grant(transport)
     h.setVisible(false)
     h.session.onHidden()
-    expect(h.state.paused).toBe(true)
     await h.advance(100)
+    expect(h.state.paused).toBe(true)
+    expect(h.session.getSnapshot()).toMatchObject({ owner: 'phone', returning: false })
     expect(offered(transport)).toBeUndefined()
+    expect(h.session.beforeStep(h.state.controls)).toBe(false)
     h.setVisible(true)
-    await h.advance(100)
-    expect(offered(transport)).toBe('now')
-    const handoff = h.grant(transport, 2)
-    expect(h.session.getSnapshot().owner).toBe('phone')
-    // The computer never resumes by itself: the phone lifts the pause once it
-    // has heard that it is flying.
-    expect(transport.last('granted')).toMatchObject({ resume: true, status: { owner: 'phone', paused: true } })
-    expect(h.state.paused).toBe(true)
-    lift(transport, handoff)
+    const heartbeat = transport.last('heartbeat')
+    transport.receiveNative({ ...heartbeat, type: 'controls', seq: 1, controls: handoff.controls })
+    transport.receive({ ...heartbeat, type: 'action', id: 2, action: 'setPaused', value: false })
     expect(h.state.paused).toBe(false)
+    expect(transport.last('ack')).toMatchObject({ ok: true, epoch: handoff.epoch })
+    expect(h.ownership).toHaveBeenCalledTimes(1)
   })
 
-  it('takes control back from a phone quiet for longer than the hold, without a pause, and gives it back once heard', async () => {
+  it('retains a chosen pause through priority changes', async () => {
     const h = setup()
     const transport = await h.pair()
     h.grant(transport)
-    await h.advance(2000)
-    expect(h.session.getSnapshot().owner).toBe('phone')
-    await h.advance(300)
-    expect(h.session.getSnapshot()).toMatchObject({ owner: 'local', returning: true })
-    expect(h.pause).not.toHaveBeenCalled()
-    expect(h.session.log.entries().at(-1)).toMatchObject({ code: 'phone-silent', detail: expect.stringContaining('control came back to this computer') })
-    await h.advance(100)
-    expect(offered(transport)).toBe('now')
-    h.grant(transport, 2)
-    expect(h.session.getSnapshot().owner).toBe('phone')
-    expect(transport.last('granted').resume).toBeUndefined()
-  })
-
-  it('keeps a pause chosen while the phone was away', async () => {
-    const h = setup()
-    const transport = await h.pair()
-    h.grant(transport)
-    h.session.onHidden()
-    // The pilot here resumes, then pauses again: that pause is theirs.
-    h.state.paused = false
-    h.session.syncStatus()
     h.state.paused = true
-    h.session.syncStatus()
-    await h.advance(100)
-    h.grant(transport, 2)
-    expect(h.session.getSnapshot().owner).toBe('phone')
-    expect(transport.last('granted').resume).toBeUndefined()
-    expect(h.state.paused).toBe(true)
-  })
-
-  it.each(['release', 'take control here'] as const)('offers nothing back after %s', async (kind) => {
-    const h = setup()
-    const transport = await h.pair()
-    const handoff = h.grant(transport)
-    if (kind === 'release') release(transport, handoff)
-    else h.session.takeControl()
-    await h.advance(2000)
-    expect(h.session.getSnapshot()).toMatchObject({ owner: 'local', returning: false })
-    expect(offered(transport)).toBeUndefined()
-  })
-
-  it('lets this computer keep control it is waiting to hand back', async () => {
-    const h = setup()
-    const transport = await h.pair()
-    h.grant(transport)
-    h.session.onHidden()
-    expect(h.session.getSnapshot().returning).toBe(true)
     h.session.takeControl()
-    await h.advance(100)
-    expect(h.session.getSnapshot().returning).toBe(false)
-    expect(offered(transport)).toBeUndefined()
+    action(transport, 'setPriority', 2, 'phone')
+    expect(h.state.paused).toBe(true)
+    expect(h.session.getSnapshot().owner).toBe('phone')
+    expect(h.pause).not.toHaveBeenCalled()
   })
 
-  it('a release counts even over a stale connection', async () => {
+  it('expires only after five total seconds of silence and offers a fresh handoff on recovery', async () => {
+    const h = setup()
+    h.setSharing({ holdMs: 0, handover: 'computer' })
+    const transport = await h.pair()
+    const first = h.grant(transport)
+    h.session.takeControl()
+    await h.advance(5000)
+    expect(h.session.getSnapshot().owner).toBe('phone')
+    await h.advance(50)
+    expect(h.session.getSnapshot()).toMatchObject({ owner: 'local', returning: true })
+    expect(h.session.isBlending()).toBe(false)
+    expect(h.pause).not.toHaveBeenCalled()
+    await h.advance(50)
+    expect(offered(transport)).toBe('now')
+    const recovered = h.grant(transport, 2)
+    expect(recovered.epoch).toBeGreaterThan(first.epoch)
+    expect(h.session.getSnapshot()).toMatchObject({ owner: 'phone', priority: 'computer' })
+  })
+
+  it('does not renew participation from malformed controls, stale leases or priority actions', async () => {
     const h = setup()
     const transport = await h.pair()
     const handoff = h.grant(transport)
-    await h.advance(300)
-    release(transport, handoff)
-    expect(transport.last('ack')).toMatchObject({ id: 2, ok: false })
-    await h.advance(2000)
-    expect(h.session.getSnapshot()).toMatchObject({ owner: 'local', returning: false })
-    expect(offered(transport)).toBeUndefined()
+    for (let tick = 1; tick <= 100; tick++) {
+      await h.advance(50)
+      const heartbeat = transport.last('heartbeat')
+      transport.receiveNative({ ...heartbeat, type: 'controls', seq: tick, controls: { ...handoff.controls, rudder: 2 } })
+      transport.receiveNative({ ...heartbeat, type: 'controls', seq: tick, lease: handoff.lease, controls: handoff.controls })
+      action(transport, 'setPriority', tick + 1, tick % 2 ? 'computer' : 'phone')
+    }
+    // The old lease was still valid for its first 250 ms; after that no input is accepted.
+    await h.advance(350)
+    expect(h.session.getSnapshot().owner).toBe('local')
+    expect(h.pause).not.toHaveBeenCalled()
   })
 
-  it('only when taken: waits for Take control on the phone, which keeps the pause', async () => {
+  it('a voluntary release ends participation and prevents automatic hand-back', async () => {
     const h = setup()
-    h.setSharing({ handover: 'stay' })
     const transport = await h.pair()
     h.grant(transport)
-    h.session.noteLocalInput()
-    await h.advance(2000)
+    action(transport, 'releaseControl', 2)
+    await h.advance(100)
     expect(h.session.getSnapshot()).toMatchObject({ owner: 'local', returning: false })
     expect(offered(transport)).toBeUndefined()
-    h.grant(transport, 2)
-    h.session.onHidden()
-    await h.advance(100)
-    expect(offered(transport)).toBeUndefined()
-    h.grant(transport, 3)
-    expect(h.session.getSnapshot().owner).toBe('phone')
-    expect(transport.last('granted').resume).toBeUndefined()
     expect(h.state.paused).toBe(true)
   })
 
-  it('latched to the phone: flight input here neither takes control nor holds up its return', async () => {
+  it('follows priority settings live without evicting the phone', async () => {
     const h = setup()
-    h.setSharing({ handover: 'phone' })
     const transport = await h.pair()
-    h.grant(transport)
-    h.setLocalActive(true)
-    h.session.noteLocalInput()
-    expect(h.session.getSnapshot().owner).toBe('phone')
-    await h.advance(2400)
-    expect(h.session.getSnapshot().owner).toBe('local')
-    expect(offered(transport)).toBe('now')
-    h.grant(transport, 2)
-    expect(h.session.getSnapshot().owner).toBe('phone')
-    expect(h.pause).not.toHaveBeenCalled()
-  })
-
-  it('blending: flight input here neither takes control nor holds up its return, and the status says whose input wins', async () => {
-    const h = setup()
-    h.setSharing({ mode: 'blend', priority: 'computer' })
-    const transport = await h.pair()
-    h.grant(transport)
-    expect(h.ownership).toHaveBeenLastCalledWith('phone', expect.anything(), true)
-    expect(h.session.isBlending()).toBe(true)
-    h.setLocalActive(true)
-    h.session.noteLocalInput()
+    const handoff = h.grant(transport)
+    h.setSharing({ mode: 'exclusive', handover: 'computer', priority: 'computer' })
     await h.advance(100)
-    expect(h.session.getSnapshot()).toMatchObject({ owner: 'phone', message: 'Phone and computer blended' })
-    expect(transport.native.findLast(message => message.type === 'heartbeat' && message.status)).toMatchObject({ status: { blend: 'computer' } })
-    // A phone quiet past the hold leaves the blend, with no pause, and joins
-    // again without waiting for these controls.
-    await h.advance(2300)
-    expect(h.session.getSnapshot().owner).toBe('local')
-    expect(h.session.isBlending()).toBe(false)
-    expect(h.ownership).toHaveBeenLastCalledWith('local', expect.anything(), true)
-    expect(h.pause).not.toHaveBeenCalled()
-    expect(offered(transport)).toBe('now')
-    h.grant(transport, 2)
-    expect(h.session.getSnapshot().owner).toBe('phone')
-    expect(h.session.isBlending()).toBe(true)
-  })
-
-  it('grants a flying phone again under a change of sharing', async () => {
-    const h = setup()
-    const transport = await h.pair()
-    h.grant(transport)
-    expect(h.ownership).toHaveBeenLastCalledWith('phone', expect.anything(), false)
-    h.setSharing({ mode: 'blend' })
-    await h.advance(50)
-    expect(h.session.getSnapshot().owner).toBe('local')
-    expect(h.pause).not.toHaveBeenCalled()
-    expect(offered(transport)).toBe('now')
-    h.grant(transport, 2)
-    expect(h.ownership).toHaveBeenLastCalledWith('phone', expect.anything(), true)
-  })
-
-  it('latched to this computer: a flying phone is taken off and cannot ask again until unlatched', async () => {
-    const h = setup()
-    const transport = await h.pair()
-    h.grant(transport)
-    h.setSharing({ handover: 'computer' })
-    await h.advance(50)
-    expect(h.session.getSnapshot().owner).toBe('local')
-    expect(h.pause).not.toHaveBeenCalled()
-    expect(offered(transport)).toBeUndefined()
-    h.requestControl(transport, 2)
-    expect(transport.last('ack')).toMatchObject({ id: 2, ok: false })
-    h.setSharing({ handover: 'auto' })
-    await h.advance(100)
-    expect(offered(transport)).toBe('now')
+    expect(h.session.getSnapshot()).toMatchObject({ owner: 'phone', priority: 'computer' })
+    expect(transport.last('status')).toMatchObject({ epoch: handoff.epoch, status: { owner: 'phone', blend: 'computer' } })
+    expect(transport.native.findLast(message => message.type === 'heartbeat' && message.status)).toMatchObject({ epoch: handoff.epoch, status: { blend: 'computer' } })
+    expect(h.ownership).toHaveBeenCalledTimes(1)
   })
 })

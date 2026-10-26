@@ -22,6 +22,10 @@
       "source": "./src/controlSharing.ts",
       "default": "./src/controlSharing.ts"
     },
+    "./controlPosition": {
+      "source": "./src/controlPosition.ts",
+      "default": "./src/controlPosition.ts"
+    },
     "./createPhoneControllerApp": {
       "source": "./src/createPhoneControllerApp.tsx",
       "default": "./src/createPhoneControllerApp.tsx"
@@ -104,7 +108,11 @@
       "source": "./src/useFullscreenOffer.ts",
       "default": "./src/useFullscreenOffer.ts"
     },
-    "./package.json": "./package.json"
+    "./package.json": "./package.json",
+    "./peerTransport": {
+      "source": "./src/peerTransport.ts",
+      "default": "./src/peerTransport.ts"
+    }
   },
   "peerDependencies": {
     "@foss-earth/ui": "0.1.0",

@@ -9,9 +9,11 @@ import type { EngineStatus } from './protocol'
  * sends the intents the desktop's lever acts on, over the control channel.
  * A host that reports no engine `state` gets a plain throttle.
  */
-export function PhoneThrottle({ value, brake, brakeRange, keepBrakes, engine, disabled, onChange, onPowerChange, onStartHold, onShutdown }: {
+export function PhoneThrottle({ value, brake, actualThrottle, actualBrake, brakeRange, keepBrakes, engine, disabled, onChange, onPowerChange, onStartHold, onShutdown }: {
   value: number
   brake: number
+  actualThrottle?: number
+  actualBrake?: number
   brakeRange: boolean
   keepBrakes: boolean
   engine: EngineStatus | undefined
@@ -43,12 +45,14 @@ export function PhoneThrottle({ value, brake, brakeRange, keepBrakes, engine, di
     lever.current?.update({
       throttle: value,
       brake,
+      actualThrottle,
+      actualBrake,
       brakeRange,
       keepBrakes,
       engine: state === undefined ? null : { state, startProgress: start, blocked },
       disabled,
     })
-  }, [value, brake, brakeRange, keepBrakes, state, start, blocked, disabled])
+  }, [value, brake, actualThrottle, actualBrake, brakeRange, keepBrakes, state, start, blocked, disabled])
   // Engine off, the lever rests at idle, and so does the throttle this phone sends.
   useEffect(() => {
     if (state === 'stopped' && value > 0 && !held.current) handlers.current.onChange(0)

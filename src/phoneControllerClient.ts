@@ -71,6 +71,8 @@ export interface PhoneControllerClient {
   nudgeCamera(delta: CameraAim, input?: InputTiming): void
   cancelTransientControls(): void
   requestControl(): boolean
+  /** Change which connected pilot's input wins, without interrupting either control stream. */
+  setPriority(priority: 'phone' | 'computer'): boolean
   setPaused(paused: boolean): boolean
   setViewMode(mode: 'first' | 'third'): boolean
   /** Only offered when the host advertises `gearDown`; older hosts cannot move it. */
@@ -507,7 +509,7 @@ export function createPhoneControllerClient(
     keepSettings(message.settings)
   }
 
-  function sendAction(action: ActionName, value?: boolean | 'first' | 'third'): boolean {
+  function sendAction(action: ActionName, value?: boolean | 'first' | 'third' | 'phone' | 'computer'): boolean {
     if (finished || snapshot.phase !== 'ready' || !session || lease < 0 || !snapshot.hostFresh || pending.size >= 8) return false
     if (action === 'requestControl' && (!snapshot.canFly || !isCentered(controls))) {
       emit({ message: 'Center controls to take over.' }); return false
@@ -540,9 +542,10 @@ export function createPhoneControllerClient(
     // Hiding/abandoning a handoff revokes this epoch locally. An in-flight
     // status cannot reinstate it; the host must issue a new Fly handoff.
     if (authoritative) authorityEpoch = status.owner === 'phone' && epoch > blockedAuthorityEpoch ? epoch : -1
-    // A pre-grant heartbeat may arrive after granted on the other channel.
-    // Only reliable messages transfer ownership; telemetry cannot undo a grant.
-    if (!authoritative && snapshot.status) status = { ...status, owner: snapshot.status.owner }
+    // An older heartbeat may arrive after a grant or priority acknowledgement
+    // on the other channel. Reliable status owns both choices; telemetry must
+    // not make Take control appear to switch back immediately afterwards.
+    if (!authoritative && snapshot.status) status = { ...status, owner: snapshot.status.owner, blend: snapshot.status.blend }
     // Telemetry must never drag a live slider/stick back to the previous frame.
     if (status.owner === 'local' && handoffEpoch === null) adoptControls(status.controls)
     if (!status.throttleBrakeRange && leverBrake > 0) {
@@ -864,7 +867,8 @@ export function createPhoneControllerClient(
       inputChanged()
     },
     cancelTransientControls,
-    requestControl: () => sendAction('requestControl'),
+    requestControl: () => snapshot.status?.owner === 'phone' ? sendAction('setPriority', 'phone') : sendAction('requestControl'),
+    setPriority: priority => sendAction('setPriority', priority),
     setPaused: value => sendAction('setPaused', value),
     setViewMode: value => sendAction('setViewMode', value),
     setGearDown: value => (snapshot.status?.gearDown === undefined ? false : sendAction('setGearDown', value)),

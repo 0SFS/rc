@@ -1,73 +1,35 @@
-/**
- * Who flies when a phone and this computer could both: the Remote Control
- * tab's *Who flies* section. Read live by the phone session at every decision,
- * so a change applies at once. Spec: `docs/proposals/phone-controller.md`
- * → *Sharing the controls*.
- */
+/** Shared flight input: Take control selects priority, never an exclusive owner. */
 import {
   remoteControlParameterDefaults,
   type RemoteControlParameterId,
   type RemoteControlParameters,
 } from "./settings";
+import { PHONE_CONNECTION_LOSS_MS } from "./protocol";
 
-/**
- * How control changes hands while one device flies at a time.
- *
- * - `auto`: flight input on this computer takes control, and control goes back
- *   to the phone by itself as soon as nothing is in the way — these controls
- *   have rested, this tab is showing, and the phone is heard from.
- * - `stay`: whichever device has control keeps it until the other takes it on
- *   purpose. The phone's pilot taps Take control to fly again.
- * - `phone`: latched to the phone. It flies whenever it is heard from, and
- *   flight input here does not take control from it.
- * - `computer`: latched to this computer. The phone cannot take control.
- *
- * In every mode Take control in the Remote Control tab takes control on
- * purpose, and the phone then waits to be asked again.
- */
+/** Legacy values remain in the type for source compatibility, but are not read from saved settings. */
 export type ControlHandover = "auto" | "stay" | "phone" | "computer";
-
-/**
- * `exclusive`: one device flies at a time, and `handover` says when control
- * passes. `blend`: a phone that has taken control flies together with this
- * computer, which keeps its own controls live; `priority` says whose input
- * wins where both move the same control. `handover` then only says when the
- * phone joins again after a loss.
- */
 export type ControlSharingMode = "exclusive" | "blend";
 export type BlendPriority = "phone" | "computer";
 
 export interface ControlSharing {
+  /** Always blend for a live paired phone. */
   mode: ControlSharingMode;
+  /** Legacy handover policies no longer revoke a phone on local input. */
   handover: ControlHandover;
-  /** With `auto`, one device at a time: how long this computer's flight controls rest before control goes back to the phone. */
   returnIdleMs: number;
   priority: BlendPriority;
-  /**
-   * How long a flying phone's last command stands once its input stops
-   * arriving, past the stale limit. Then its stick, rudder, brake and starter
-   * let go and control comes back here, to go back to the phone as `handover` says.
-   */
+  /** Total valid-input loss timeout, in milliseconds. */
   holdMs: number;
 }
 
-const PARAMETER_IDS = {
-  mode: "osfs.remote.sharing",
-  handover: "osfs.remote.handover",
-  returnIdle: "osfs.remote.returnIdle",
-  priority: "osfs.remote.blendPriority",
-  hold: "osfs.remote.holdLast",
-} as const satisfies Record<string, RemoteControlParameterId>;
-
-export const CONTROL_SHARING_PARAMETER_IDS: readonly RemoteControlParameterId[] = Object.values(PARAMETER_IDS);
+export const CONTROL_SHARING_PARAMETER_IDS: readonly RemoteControlParameterId[] = ["osfs.remote.blendPriority"];
 
 export function readControlSharing(parameters: RemoteControlParameters): ControlSharing {
+  // Ignore saved exclusive/automatic takeover and hold settings. A previous
+  // preference cannot silently restore keyboard-triggered remote revocation.
   return {
-    mode: parameters.get(PARAMETER_IDS.mode),
-    handover: parameters.get(PARAMETER_IDS.handover),
-    returnIdleMs: parameters.get(PARAMETER_IDS.returnIdle) * 1000,
-    priority: parameters.get(PARAMETER_IDS.priority),
-    holdMs: parameters.get(PARAMETER_IDS.hold) * 1000,
+    mode: "blend", handover: "phone", returnIdleMs: 0, holdMs: PHONE_CONNECTION_LOSS_MS,
+    priority: parameters.get("osfs.remote.blendPriority"),
   };
 }
 

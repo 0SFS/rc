@@ -8,6 +8,8 @@ export const PROTOCOL_VERSION = 1;
 export const PROTOCOL_MISMATCH_MESSAGE = "Unsupported phone protocol. Reload both devices.";
 export const MAX_MESSAGE_BYTES = 2048;
 export const STALE_MS = 250;
+/** Total time since the last valid phone controls before its live participation expires. */
+export const PHONE_CONNECTION_LOSS_MS = 5000;
 export const HANDOFF_MS = 2000;
 export const CONTROL_INTERVAL_MS = 1000 / 60;
 export const HEARTBEAT_MS = 50;
@@ -62,11 +64,16 @@ export interface EngineStatus {
 }
 export const ENGINE_RUN_STATES: readonly EngineRunState[] = ["running", "starting", "stopped"];
 
+/** Measured actuator positions. A missing member means the model has no observation for it. */
+export type ActualControlPositions = Partial<Pick<ControlSurfaceState, "throttle" | "flaps" | "rudder" | "pitchTrim" | "rollTrim">>;
+
 export interface AircraftStatus {
   owner: "local" | "phone";
   paused: boolean;
   viewMode: "first" | "third";
   controls: ControlSurfaceState;
+  /** Presentation only; separate from the controls used by handoff and input ownership. */
+  actualControls?: ActualControlPositions;
   airspeedKts: number;
   altitudeFt: number;
   headingDeg: number;
@@ -92,8 +99,8 @@ export interface AircraftStatus {
    */
   handBack?: HandBack;
   /**
-   * This phone flies together with the computer, whose own controls stay live,
-   * and whose input wins where both move a control. The phone's levers then
+   * Both devices remain live; this says whose input wins where both move a
+   * control. The phone's levers then
    * follow `controls`, where the levers are, once the computer has applied the
    * phone's own latest move (`appliedSeq`). Additive on v1: an older phone
    * keeps its levers where it put them.
@@ -236,9 +243,9 @@ export function isPhoneControllerSettings(value: unknown): value is PhoneControl
 export type PhoneSettingsMessage = Envelope & { type: "settings"; settings: PhoneControllerSettings; rev: number; initial?: true };
 
 export interface Envelope { v: 1; session: string; epoch: number }
-export type ActionName = "requestControl" | "releaseControl" | "setPaused" | "setViewMode" | "setGearDown" | "shutdownEngine";
+export type ActionName = "requestControl" | "releaseControl" | "setPriority" | "setPaused" | "setViewMode" | "setGearDown" | "shutdownEngine";
 export type ActionMessage = Envelope & {
-  type: "action"; id: number; lease: number; action: ActionName; value?: boolean | "first" | "third";
+  type: "action"; id: number; lease: number; action: ActionName; value?: boolean | "first" | "third" | "phone" | "computer";
 };
 /** Latest-value presentation cue; pulseMs 0 means stop now. Never a history of impacts. */
 export interface HapticFeedbackFrame { v: 1; id: number; pulseMs: number; ttlMs: number }
@@ -300,6 +307,16 @@ export function isControls(value: unknown): value is ControlSurfaceState {
   return ["elevator", "aileron", "rudder", "pitchTrim", "rollTrim"].every(key => finite(value[key]) && Math.abs(value[key]) <= 1)
     && ["throttle", "flaps", "brake"].every(key => finite(value[key]) && value[key] >= 0 && value[key] <= 1);
 }
+function actualControlPositions(value: unknown): ActualControlPositions | undefined {
+  if (!record(value)) return undefined;
+  const result: ActualControlPositions = {};
+  for (const key of ["throttle", "flaps", "rudder", "pitchTrim", "rollTrim"] as const) {
+    const position = value[key];
+    // Physical flaps can reflex above neutral even though their lever stops at zero.
+    if (finite(position) && position >= (key === "throttle" ? 0 : -1) && position <= 1) result[key] = position;
+  }
+  return Object.keys(result).length ? result : undefined;
+}
 export function isHapticFeedback(value: unknown): value is HapticFeedbackFrame {
   return record(value) && value.v === HAPTIC_FEEDBACK_VERSION && isCounter(value.id)
     && Number.isInteger(value.pulseMs) && (value.pulseMs as number) >= 0 && (value.pulseMs as number) <= MAX_HAPTIC_PULSE_MS
@@ -349,6 +366,11 @@ function status(value: unknown): value is AircraftStatus {
   // phone then simply waits to be asked, as it would from an older computer.
   if (valid && value.handBack !== undefined && value.handBack !== "now" && value.handBack !== "idle") delete value.handBack;
   if (valid && value.blend !== undefined && value.blend !== "phone" && value.blend !== "computer") delete value.blend;
+  if (valid && value.actualControls !== undefined) {
+    const positions = actualControlPositions(value.actualControls);
+    if (positions) value.actualControls = positions;
+    else delete value.actualControls;
+  }
   return valid;
 }
 
@@ -412,6 +434,7 @@ export function parseMessage(input: unknown): RemoteMessage | null {
       ((value.action === "requestControl" || value.action === "releaseControl" || value.action === "shutdownEngine") && value.value === undefined)
       || ((value.action === "setPaused" || value.action === "setGearDown") && typeof value.value === "boolean")
       || (value.action === "setViewMode" && (value.value === "first" || value.value === "third"))
+      || (value.action === "setPriority" && (value.value === "phone" || value.value === "computer"))
     ); break;
   }
   return valid ? value as RemoteMessage : null;

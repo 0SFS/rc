@@ -45,6 +45,7 @@ export interface TransportDiagnostics {
 
 export interface SessionTransport {
   readonly id: string
+  readonly peerId: string
   /** Initial reliable channel only; the application separately authenticates and exchanges native-ready messages. */
   readonly ready: Promise<void>
   readonly nativeOpen: boolean
@@ -86,7 +87,25 @@ function subscribe<T>(handlers: Set<(value: T) => void>, handler: (value: T) => 
   return () => { handlers.delete(handler) }
 }
 
-function wrapConnection(connection: DataConnection, log: ConnectionLog): SessionTransport {
+/** Channel names and packet bounds; secrets never belong in this public metadata. */
+export interface PeerProtocol {
+  sessionLabel: string
+  nativeLabel: string
+  metadata: { v: number; protocol: string }
+  maxMessageBytes: number
+}
+
+const PHONE_PROTOCOL: PeerProtocol = {
+  sessionLabel: 'flight-session-v1', nativeLabel: 'flight-controls-v1',
+  metadata: { v: 1, protocol: 'flight-session' }, maxMessageBytes: FRAME_BYTES,
+}
+
+function wrapConnection(connection: DataConnection, log: ConnectionLog, protocol: PeerProtocol): SessionTransport {
+  const FRAME_BYTES = protocol.maxMessageBytes
+  const encodeFrame = (value: unknown) => {
+    const bytes = encode(value)
+    return bytes && bytes.byteLength <= FRAME_BYTES ? bytes : null
+  }
   const reliableHandlers = new Set<(value: unknown) => void>()
   const nativeHandlers = new Set<(value: unknown) => void>()
   const closeHandlers = new Set<(reason: string) => void>()
@@ -179,7 +198,7 @@ function wrapConnection(connection: DataConnection, log: ConnectionLog): Session
   function handleOpen(): void {
     if (closedReason !== null) return
     const channel = connection.dataChannel
-    if (connection.label !== 'flight-session-v1' || connection.serialization !== 'json' ||
+    if (connection.label !== protocol.sessionLabel || connection.serialization !== 'json' ||
         !connection.reliable || !channel || !channel.ordered || channel.maxRetransmits !== null || channel.maxPacketLifeTime !== null) {
       finish('channel-unsupported', 'Unsupported phone connection. Reload both devices.')
       return
@@ -194,7 +213,7 @@ function wrapConnection(connection: DataConnection, log: ConnectionLog): Session
 
   function handleData(value: unknown): void {
     if (closedReason !== null) return
-    if (value === invalidJson || !encode(value)) {
+    if (value === invalidJson || !encodeFrame(value)) {
       finish('invalid-message', 'Invalid or oversized phone message.')
       return
     }
@@ -242,6 +261,7 @@ function wrapConnection(connection: DataConnection, log: ConnectionLog): Session
 
   const transport: SessionTransport = {
     id: connection.connectionId,
+    peerId: connection.peer,
     ready,
     log,
     get nativeOpen() { return closedReason === null && native?.readyState === 'open' },
@@ -256,7 +276,7 @@ function wrapConnection(connection: DataConnection, log: ConnectionLog): Session
     },
     sendReliable(value) {
       const channel = connection.dataChannel
-      const bytes = encode(value)
+      const bytes = encodeFrame(value)
       if (closedReason !== null || !connection.open || channel?.readyState !== 'open' || !bytes) return false
       if (channel.bufferedAmount === 0) reliablePendingCount = 0
       if (reliablePendingCount >= 8 || channel.bufferedAmount + bytes.byteLength > 8 * FRAME_BYTES) return false
@@ -283,7 +303,7 @@ function wrapConnection(connection: DataConnection, log: ConnectionLog): Session
       try {
         // No additional in-band channel: PeerJS's ondatachannel callback must
         // keep referring to its original reliable DataConnection.
-        native = peerConnection.createDataChannel('flight-controls-v1', {
+        native = peerConnection.createDataChannel(protocol.nativeLabel, {
           negotiated: true, id: selected, ordered: false, maxRetransmits: 0,
         })
       } catch {
@@ -336,7 +356,7 @@ function wrapConnection(connection: DataConnection, log: ConnectionLog): Session
       return nativeReady
     },
     sendNative(value, priority = false) {
-      const bytes = encode(value)
+      const bytes = encodeFrame(value)
       if (closedReason !== null || native?.readyState !== 'open' || !bytes) return false
       const pending = { bytes, queuedAt: performance.now(), value }
       discard(priority ? pendingPriority : pendingNormal, 'replaced')
@@ -383,7 +403,9 @@ export function createPeerEndpoint(options: {
   log?: ConnectionLog
   role?: DiagnosticRole
   iceServers?: RTCIceServer[]
+  protocol?: PeerProtocol
 } = {}) {
+  const protocol = options.protocol ?? PHONE_PROTOCOL
   const log = options.log ?? createConnectionLog(options.role ?? 'phone')
   const ice = options.iceServers ? { servers: options.iceServers, origin: 'explicit' as const } : resolveIceServers()
   const startedAt = performance.now()
@@ -412,7 +434,7 @@ export function createPeerEndpoint(options: {
   }, REGISTRATION_TIMEOUT_MS)
 
   function track(connection: DataConnection): SessionTransport {
-    const transport = wrapConnection(connection, log)
+    const transport = wrapConnection(connection, log, protocol)
     sessions.add(transport)
     transport.onClose(() => { sessions.delete(transport); outgoing.delete(connection.peer) })
     return transport
@@ -524,8 +546,8 @@ export function createPeerEndpoint(options: {
       }
       log.record('signaling', 'dialing', `Offering a session to ${peerId}`)
       const connection = peer.connect(peerId, {
-        label: 'flight-session-v1', reliable: true, serialization: 'json',
-        metadata: { v: 1, protocol: 'flight-session' },
+        label: protocol.sessionLabel, reliable: true, serialization: 'json',
+        metadata: protocol.metadata,
       })
       const transport = track(connection)
       outgoing.set(peerId, transport)

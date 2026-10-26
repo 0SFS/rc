@@ -62,7 +62,7 @@ function mount({ engine, status, snapshot, onPair }: {
     subscribe: listener => { listeners.add(listener); return () => { listeners.delete(listener) } },
     getSnapshot: () => state,
     updateControls, updatePower, nudgeCamera, cancelTransientControls: vi.fn(), requestControl,
-    setPaused, setViewMode, setGearDown: () => true, setStarterHeld, shutdownEngine, releaseControl: () => true,
+    setPaused, setViewMode, setGearDown: () => true, setStarterHeld, shutdownEngine, releaseControl: () => true, setPriority: () => true,
     setHapticsEnabled, updateSettings, destroy: vi.fn(),
   }
   act(() => root.render(<PhoneController client={client} onPair={onPair} />))
@@ -89,6 +89,11 @@ const drag = (input: HTMLInputElement, value: string) => {
 }
 const yawTrack = () => container.querySelector<HTMLInputElement>('.phone-yaw input[type="range"]')!
 const yawReturn = () => updateControls.mock.calls.at(-1)![0].rudder as number
+const windowPointer = (type: string, pointerId: number) => {
+  const event = new Event(type, { bubbles: true, cancelable: true })
+  Object.assign(event, { pointerId })
+  act(() => { window.dispatchEvent(event) })
+}
 
 beforeEach(() => {
   Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true })
@@ -123,6 +128,28 @@ beforeEach(() => {
 afterEach(() => { act(() => root.unmount()); container.remove(); vi.restoreAllMocks(); vi.unstubAllGlobals() })
 
 describe('phone controller screen', () => {
+  it('shows physical travel without replacing or sending the phone command', () => {
+    mount({ status: { actualControls: { flaps: .2, rudder: -.3, throttle: .4 } }, snapshot: {
+      controls: { ...NEUTRAL_CONTROLS, flaps: .8, rudder: .5, throttle: .9 },
+    } })
+    const flaps = container.querySelector<HTMLInputElement>('input[aria-label="Flaps"]')!
+    const marker = flaps.parentElement!.querySelector<HTMLElement>('.flight-control-position__actual')!
+    expect(flaps.value).toBe('0.8')
+    expect(marker.hidden).toBe(false)
+    expect(flaps.getAttribute('aria-valuetext')).toBe('80% commanded; 20% actual')
+    expect(yawTrack().value).toBe('0.5')
+    expect(yawTrack().getAttribute('aria-valuetext')).toBe('50% commanded; -30% actual')
+    expect(container.querySelector('[data-control="throttle"]')!.getAttribute('aria-valuetext')).toContain('90% commanded throttle; 40% actual throttle')
+    act(() => {
+      state = { ...state, status: { ...state.status!, actualControls: { flaps: .6, rudder: -.1, throttle: .7 } } }
+      for (const listener of listeners) listener()
+    })
+    expect(flaps.value).toBe('0.8')
+    expect(flaps.parentElement!.style.getPropertyValue('--control-actual')).toBe('0.6')
+    expect(updateControls).not.toHaveBeenCalled()
+    expect(updatePower).not.toHaveBeenCalled()
+  })
+
   it('draws the desktop engine widget over the throttle, not engine chips in the grid', () => {
     mount({ engine: { phase: 'WINDMILLING', n1: 12.5, n2: 30, fuelFlowPph: 0 } })
     const engine = container.querySelector('.phone-yaw-throttle--engine > .phone-engine')!
@@ -237,13 +264,13 @@ describe('phone controller screen', () => {
     const link = container.querySelector('.phone-link')!
     expect(link.classList.contains('phone-link--live')).toBe(false)
     // Who flies has not changed: the computer holds this phone's last command.
-    expect(link.firstChild?.nextSibling?.textContent).toBe('PHONE')
+    expect(link.firstChild?.nextSibling?.textContent).toBe('Phone priority')
     // Still said, to assistive tech.
     expect(link.querySelector('[role="status"]')?.textContent).toBe('Connection lost · Waiting for the computer')
     expect(text('.phone-diagnostics .phone-sheet__chip')).toBe('🌐 1.2s')
     expect(container.querySelector('.phone-diagnostics__lost')).not.toBeNull()
     expect(text('.phone-diagnostics .phone-sheet__title')).toBe('Connection details · lost for 1.2 s')
-    expect(button('Release')?.disabled).toBe(false)
+    expect(button('Take control')?.disabled).toBe(false)
     expect(container.querySelector<HTMLInputElement>('input[aria-label="Pitch trim"]')?.disabled).toBe(false)
     // Heard again, the round trip is back.
     remount()
@@ -251,14 +278,22 @@ describe('phone controller screen', () => {
     expect(container.querySelector('.phone-diagnostics__lost')).toBeNull()
   })
 
-  it('names who flies on the link chip: this phone, the computer, or both blended', () => {
+  it('names priority while both devices keep control and lets this phone take priority', () => {
     const chip = () => container.querySelector('.phone-link')!.firstChild?.nextSibling?.textContent
     mount()
-    expect(chip()).toBe('PHONE')
+    expect(chip()).toBe('Phone priority')
+    expect(button('Take control')?.getAttribute('aria-pressed')).toBe('true')
     remount({ status: { owner: 'phone', blend: 'computer' } })
-    expect(chip()).toBe('BLEND')
+    expect(chip()).toBe('Computer priority')
+    expect(button('Take control')?.disabled).toBe(false)
+    expect(button('Take control')?.getAttribute('aria-pressed')).toBe('false')
+    expect(container.querySelector<HTMLInputElement>('input[aria-label="Flaps"]')?.disabled).toBe(false)
+    expect(container.querySelector<HTMLButtonElement>('.phone-stick')?.disabled).toBe(false)
+    expect(container.querySelector<HTMLElement>('.phone-throttle [data-control="throttle"]')?.getAttribute('aria-disabled')).toBe('false')
+    act(() => { button('Take control')!.click() })
+    expect(requestControl).toHaveBeenCalledOnce()
     remount({ status: { owner: 'local' }, snapshot: { canFly: true, canControl: false } })
-    expect(chip()).toBe('DESKTOP')
+    expect(chip()).toBe('Computer')
   })
 
   it('lays the grid out instruments first, then the buttons, with the brake last', () => {
@@ -266,7 +301,7 @@ describe('phone controller screen', () => {
     const describe = (child: Element) => child.querySelector('.flight-hud__label')?.textContent
       ?? (child.matches('.phone-sheet') ? child.className : child.getAttribute('aria-label') ?? child.textContent)
     expect([...grid().children].map(describe)).toEqual([
-      'IAS', 'ALT', 'HDG', 'G', expect.stringContaining('PHONE'), 'Pause simulation', 'Release',
+      'IAS', 'ALT', 'HDG', 'G', expect.stringContaining('Phone priority'), 'Pause simulation', 'Take control',
       'Haptics', 'phone-sheet phone-diagnostics', '120Hz120 control frames a second', 'phone-sheet phone-settings',
       'phone-sheet phone-browser-data', expect.stringContaining('brake'),
     ])
@@ -283,7 +318,7 @@ describe('phone controller screen', () => {
     expect(text('.phone-rate__reading')).toBe('—')
   })
 
-  it('offers Take control as a chip where Pause and Release go, never a popup, whenever the phone is not flying', () => {
+  it('keeps Take control in the chip grid before and after joining shared controls', () => {
     mount({ status: { owner: 'local' }, snapshot: { canFly: true, canControl: false, message: 'Connected · Desktop controls' } })
     expect([...container.querySelector('main')!.children].map(child => child.className))
       .toEqual(['phone-controls phone-controls--grid-bottom'])
@@ -308,9 +343,9 @@ describe('phone controller screen', () => {
     expect(button('Take control')).toBeUndefined()
     expect(container.querySelector('.phone-link')?.firstChild?.nextSibling?.textContent).toBe('OFFLINE')
 
-    // Flying: pause and release in its place.
+    // Sharing: priority stays available beside Pause.
     remount()
-    expect(button('Take control')).toBeUndefined()
+    expect(button('Take control')?.disabled).toBe(false)
     expect(button('Pause simulation')).toBeDefined()
     expect(container.querySelector('[role="dialog"]')).toBeNull()
   })
@@ -395,8 +430,60 @@ describe('phone controller screen', () => {
     mount({ snapshot: { controls: { ...NEUTRAL_CONTROLS, rudder: -.42 } } })
     expect(yawTrack().value).toBe('-0.42')
     expect(text('.phone-yaw output')).toBe('-42%')
+    pointer(yawTrack(), 'pointerdown')
     pointer(yawTrack(), 'pointerup')
     expect(updateControls).toHaveBeenLastCalledWith({ rudder: 0 })
+  })
+
+  it.each(['pointerup', 'pointercancel'])('centres yaw when its active pointer sends %s outside the input', type => {
+    mount({ snapshot: { controls: { ...NEUTRAL_CONTROLS, rudder: .6 } } })
+    pointer(yawTrack(), 'pointerdown', { pointerId: 7 })
+    expect(yawTrack().setPointerCapture).toHaveBeenCalledWith(7)
+    windowPointer(type, 8)
+    expect(updateControls).not.toHaveBeenCalled()
+    windowPointer(type, 7)
+    expect(updateControls).toHaveBeenLastCalledWith({ rudder: 0 })
+    const sent = updateControls.mock.calls.length
+    windowPointer(type, 7)
+    expect(updateControls.mock.calls).toHaveLength(sent)
+  })
+
+  it.each(['pointerup', 'pointercancel'])('keeps yaw in hold mode when its pointer sends %s outside the input', type => {
+    mount({ snapshot: { controls: { ...NEUTRAL_CONTROLS, rudder: .6 }, settings: { ...DEFAULT_PHONE_SETTINGS, yawRelease: 'hold' } } })
+    pointer(yawTrack(), 'pointerdown', { pointerId: 7 })
+    windowPointer(type, 7)
+    expect(updateControls).not.toHaveBeenCalled()
+    expect(yawTrack().value).toBe('0.6')
+  })
+
+  it('centres once when the input release bubbles and capture is then lost', () => {
+    mount({ snapshot: { controls: { ...NEUTRAL_CONTROLS, rudder: .6 } } })
+    pointer(yawTrack(), 'pointerdown', { pointerId: 7 })
+    pointer(yawTrack(), 'pointerup', { pointerId: 7 })
+    pointer(yawTrack(), 'lostpointercapture', { pointerId: 7 })
+    expect(updateControls.mock.calls).toEqual([[{ rudder: 0 }]])
+  })
+
+  it('animates an outside yaw release and lets a new press interrupt that return', () => {
+    vi.useFakeTimers()
+    try {
+      mount({ snapshot: { controls: { ...NEUTRAL_CONTROLS, rudder: 1 }, settings: { ...DEFAULT_PHONE_SETTINGS, yawReturnMs: 500 } } })
+      pointer(yawTrack(), 'pointerdown', { pointerId: 7 })
+      windowPointer('pointerup', 7)
+      act(() => { vi.advanceTimersByTime(250) })
+      expect(yawReturn()).toBeGreaterThan(.3)
+      expect(yawReturn()).toBeLessThan(.7)
+      pointer(yawTrack(), 'pointerdown', { pointerId: 8 })
+      const sent = updateControls.mock.calls.length
+      act(() => { vi.advanceTimersByTime(300) })
+      expect(updateControls.mock.calls).toHaveLength(sent)
+      windowPointer('pointerup', 7)
+      act(() => { vi.advanceTimersByTime(100) })
+      expect(updateControls.mock.calls).toHaveLength(sent)
+      windowPointer('pointerup', 8)
+      act(() => { vi.advanceTimersByTime(550) })
+      expect(updateControls).toHaveBeenLastCalledWith({ rudder: 0 })
+    } finally { vi.useRealTimers() }
   })
 
   it('keeps the yaw where the finger left it when Settings says so, and remembers that', () => {
@@ -406,6 +493,7 @@ describe('phone controller screen', () => {
     // No return time to set: there is no return.
     expect(container.querySelector('.phone-settings__slider')).toBeNull()
     updateControls.mockClear()
+    pointer(yawTrack(), 'pointerdown')
     pointer(yawTrack(), 'pointerup')
     pointer(yawTrack(), 'pointercancel')
     // React's onBlur is focusout; a bubbling `blur` would reach the window
@@ -432,6 +520,7 @@ describe('phone controller screen', () => {
     expect(updateSettings).toHaveBeenLastCalledWith({ yawRelease: 'center', yawReturnMs: 500 })
 
     updateControls.mockClear()
+    pointer(yawTrack(), 'pointerdown')
     pointer(yawTrack(), 'pointerup')
     // Each step of the sweep is an ordinary rudder update, so the aircraft
     // yaws its way back rather than snapping.

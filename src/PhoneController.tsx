@@ -9,6 +9,7 @@ import { PhoneFullscreenButton, PhoneFullscreenPrompt } from "./PhoneFullscreenP
 import { useFullscreenOffer } from "./useFullscreenOffer";
 import { PhoneSettings } from "./PhoneSettings";
 import { PhoneYaw } from "./PhoneYaw";
+import { PhoneControlRange } from "./PhoneControlRange";
 import type { GridPosition, YawSettings } from "./phoneSettingsStore";
 import { ConnectionDiagnosticsPanel } from "./ConnectionDiagnosticsPanel";
 import { PhoneBrowserData } from "./PhoneBrowserData";
@@ -47,7 +48,8 @@ export function PhoneController({ client, onPair }: { client: PhoneControllerCli
   const ended = state.phase === "error" || state.phase === "disconnected";
   const connected = state.phase === "ready";
   const locked = !state.canControl;
-  const owner = status?.owner === "phone" ? (status.blend ? "BLEND" : "PHONE") : "DESKTOP";
+  const phonePriority = status?.owner === "phone" && status.blend !== "computer";
+  const owner = status?.owner === "phone" ? (phonePriority ? "Phone priority" : "Computer priority") : "Computer";
   const percent = (value: number) => `${Math.round(value * 100)}%`;
   // Fixed-width values keep a chip from resizing as its number grows.
   const pad = (value: string, width: number) => value.padStart(width, " ");
@@ -63,8 +65,8 @@ export function PhoneController({ client, onPair }: { client: PhoneControllerCli
   // An absent `gearDown` means the host predates gear support; do not offer it.
   const gearKnown = status?.gearDown !== undefined;
   /**
-   * The link chip says who flies, at a width that does not change between its
-   * labels, and the client's full sentence goes to assistive tech. A link gone
+   * The link chip says whose input has priority, at one fixed width, and the
+   * client's full sentence goes to assistive tech. A link gone
    * quiet is the 🌐 chip's to show, as how long: who flies has not changed,
    * because the computer holds this phone's last command meanwhile.
    */
@@ -88,7 +90,7 @@ export function PhoneController({ client, onPair }: { client: PhoneControllerCli
         <label className="flight-hud__lever flight-hud__lever--pitch">
           <span className="flight-hud__lever-meta"><span>PITCH</span><output>{percent(state.controls.pitchTrim)}</output></span>
           <span className="flight-hud__lever-track">
-            <input type="range" min="-1" max="1" step=".01" value={state.controls.pitchTrim} disabled={locked}
+            <PhoneControlRange orientation="vertical" actual={status?.actualControls?.pitchTrim} min="-1" max="1" step=".01" value={state.controls.pitchTrim} disabled={locked}
               aria-label="Pitch trim" onChange={event => client.updateControls({ pitchTrim: Number(event.target.value) })} />
           </span>
         </label>
@@ -97,7 +99,7 @@ export function PhoneController({ client, onPair }: { client: PhoneControllerCli
         <div className="phone-cluster__pad">
           <label className="flight-hud__slider-control flight-hud__slider-control--roll-trim">
             <span>ROLL</span>
-            <input type="range" min="-1" max="1" step=".01" value={state.controls.rollTrim} disabled={locked}
+            <PhoneControlRange orientation="horizontal" actual={status?.actualControls?.rollTrim} min="-1" max="1" step=".01" value={state.controls.rollTrim} disabled={locked}
               aria-label="Roll trim" onChange={event => client.updateControls({ rollTrim: Number(event.target.value) })} />
             <output>{percent(state.controls.rollTrim)}</output>
           </label>
@@ -106,7 +108,7 @@ export function PhoneController({ client, onPair }: { client: PhoneControllerCli
         <label className="flight-hud__lever flight-hud__lever--flaps">
           <span className="flight-hud__lever-meta"><span>FLAPS</span><output>{percent(state.controls.flaps)}</output></span>
           <span className="flight-hud__lever-track">
-            <input type="range" min="0" max="1" step=".01" value={state.controls.flaps} disabled={locked}
+            <PhoneControlRange orientation="vertical" actual={status?.actualControls?.flaps} min="0" max="1" step=".01" value={state.controls.flaps} disabled={locked}
               aria-label="Flaps" onChange={event => client.updateControls({ flaps: Number(event.target.value) })} />
           </span>
         </label>
@@ -115,7 +117,7 @@ export function PhoneController({ client, onPair }: { client: PhoneControllerCli
         {/* Rudder is a transient control by default: releasing it returns to
             centre, the way letting go of the desktop slider does. Settings →
             Yaw decides that, and how long the return takes. */}
-        <PhoneYaw value={state.controls.rudder} disabled={locked} settings={yaw} onChange={rudder} />
+        <PhoneYaw value={state.controls.rudder} actual={status?.actualControls?.rudder} disabled={locked} settings={yaw} onChange={rudder} />
         {/* The desktop HUD's engine widget, just above the throttle it answers to,
             notched into the camera pad's corner rather than widening the column. */}
         {engine && <PhoneEngine engine={engine} paused={status?.paused ?? true} />}
@@ -129,6 +131,7 @@ export function PhoneController({ client, onPair }: { client: PhoneControllerCli
         </div>
         {/* The desktop HUD's own throttle lever, engine start and shutdown included. */}
         <PhoneThrottle value={state.controls.throttle} brake={state.leverBrake} brakeRange={status?.throttleBrakeRange === true}
+          actualThrottle={status?.actualControls?.throttle}
           keepBrakes={status?.keepSliderBrakes === true} engine={engine} disabled={locked}
           onChange={throttle} onPowerChange={power} onStartHold={starter} onShutdown={shutdown} />
       </div>
@@ -148,16 +151,16 @@ export function PhoneController({ client, onPair }: { client: PhoneControllerCli
           <span className="phone-link__dot" aria-hidden="true" />{link}
           <span className="phone-sr-only" role="status">{state.message}</span>
         </span>
-        {/* Pause and Release while flying; otherwise, where they were, the way
-            to fly — never a popup over the controls. Control the computer
-            offers back is asked for by itself, so this is for whoever would
-            rather not wait, and for control that only comes back when taken. */}
+        {/* Both devices stay live. Take control selects this phone's priority
+            without interrupting its stick, levers or camera. */}
         {flying ? <>
           {/* The flight page's own pause glyphs, lit while paused the way its bar lights. */}
           <button type="button" className="phone-pause" disabled={locked} aria-pressed={paused}
             aria-label={paused ? "Resume simulation" : "Pause simulation"} title={paused ? "Resume simulation" : "Pause simulation"}
             onClick={() => client.setPaused(!paused)}>{paused ? "▶" : "Ⅱ"}</button>
-          <button type="button" disabled={locked} onClick={() => client.releaseControl()}>Release</button>
+          <button type="button" disabled={locked} aria-pressed={phonePriority}
+            title="Give this phone priority when both devices move a control. Both devices stay live."
+            onClick={() => client.requestControl()}>Take control</button>
         </> : connected ? <button type="button" className="phone-primary" disabled={!state.canFly} title={state.message}
           onClick={() => client.requestControl()}>{state.requestingControl ? "Taking control…" : "Take control"}</button>
           : scan && <button type="button" className="phone-primary" onClick={scan}>Scan QR code</button>}

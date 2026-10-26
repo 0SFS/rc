@@ -1,5 +1,12 @@
 # Phone controller specification
 
+> The original ownership and sharing policies below are superseded by
+> [Shared controls and priority](../phone-controller.md#shared-controls-and-priority).
+> Both devices stay live; Take control selects priority. Local input never evicts
+> the phone. Valid input may be absent for up to five seconds before participation
+> expires. Legacy exclusive, automatic takeover and configurable hold settings are
+> no longer used.
+
 Status: **Implemented; device and network acceptance testing pending**  
 Date: 2026-09-08  
 Reviewed checkout: 0SFS `4d54d204e584`

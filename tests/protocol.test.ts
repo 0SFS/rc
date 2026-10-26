@@ -33,6 +33,8 @@ const accepted: RemoteMessage[] = [
   { ...envelope, type: "action", id: 5, lease: 3, action: "setViewMode", value: "first" },
   { ...envelope, type: "action", id: 6, lease: 3, action: "setViewMode", value: "third" },
   { ...envelope, type: "action", id: 7, lease: 3, action: "shutdownEngine" },
+  { ...envelope, type: "action", id: 8, lease: 3, action: "setPriority", value: "phone" },
+  { ...envelope, type: "action", id: 9, lease: 3, action: "setPriority", value: "computer" },
   { ...envelope, type: "ack", id: 2, ok: false, message: "Center controls to take over.", status },
   frame,
   { ...frame, seq: 124, camera: { yaw: -1, pitch: 0.25 } },
@@ -53,6 +55,35 @@ const accepted: RemoteMessage[] = [
 ];
 
 describe("phone protocol parsing", () => {
+  it("requires an explicit connected device for priority changes", () => {
+    for (const value of [undefined, null, true, "local", "first", 1]) {
+      expect(parseMessage({ ...envelope, type: "action", id: 3, lease: 4, action: "setPriority", value })).toBeNull();
+    }
+  });
+  it("carries optional actual positions independently of commands, including reflex flaps", () => {
+    const actualControls = { throttle: .4, flaps: -.1, rudder: .25, pitchTrim: -.3, rollTrim: .2 };
+    const heartbeat = { ...envelope, type: "heartbeat", lease: 1, status: { ...status, actualControls } };
+    expect(parseMessage(heartbeat)).toEqual(heartbeat);
+    expect(parseMessage({ ...envelope, type: "heartbeat", lease: 1, status })).toEqual({ ...envelope, type: "heartbeat", lease: 1, status });
+    expect(parseMessage({ ...heartbeat, status: { ...status, actualControls: { flaps: 1 } } })).toMatchObject({
+      status: { controls, actualControls: { flaps: 1 } },
+    });
+  });
+
+  it("drops malformed actual telemetry without losing valid positions, ownership or leases", () => {
+    const heartbeat = { ...envelope, type: "heartbeat", lease: 1, status };
+    for (const actualControls of [null, [], "positions", {}, { throttle: -0.1 }, { flaps: 1.1 }, { rudder: -1.1 },
+      { pitchTrim: "0" }, { rollTrim: Infinity }, { throttle: NaN }, { elevator: .3 }]) {
+      expect(parseMessage({ ...heartbeat, status: { ...status, actualControls } })).toEqual(heartbeat);
+    }
+    expect(parseMessage({ ...heartbeat, status: { ...status, actualControls: { throttle: "0.4", flaps: -.1, rudder: 2 } } })).toMatchObject({
+      lease: 1, status: { owner: status.owner, actualControls: { flaps: -.1 } },
+    });
+    expect(parseMessage({ ...envelope, type: "granted", requestId: 4, status: { ...status, owner: "phone", actualControls: null } })).toMatchObject({
+      type: "granted", requestId: 4, status: { owner: "phone" },
+    });
+  });
+
   it("accepts the optional throttle brake range without requiring it from older hosts", () => {
     for (const throttleBrakeRange of [undefined, false, true]) {
       expect(parseMessage({ ...envelope, type: "heartbeat", lease: 1,

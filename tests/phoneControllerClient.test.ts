@@ -181,7 +181,7 @@ describe('phone controller', () => {
     h.state.throttleBrakeRange = true
     await advance(50)
     h.client.updatePower({ throttle: 0, brake: .6 })
-    h.host.takeControl()
+    h.host.reset()
     await advance(50)
     expect(h.client.getSnapshot().leverBrake).toBe(0)
     await h.fly()
@@ -206,7 +206,7 @@ describe('phone controller', () => {
     expect(h.client.getSnapshot().leverBrake).toBe(0)
   })
 
-  it('boots with the real host, hands off centered settings, streams input, retakes control, pauses and releases', async () => {
+  it('boots with the real host, shares input, changes priority, pauses and releases', async () => {
     const h = await setup()
     expect(h.client.getSnapshot()).toMatchObject({ phase: 'ready', canFly: false, canControl: false })
     expect(h.phoneLink.reliable[0]).toEqual({ v: 1, type: 'hello', secret: h.invitation.secret })
@@ -225,8 +225,8 @@ describe('phone controller', () => {
     h.state.controls = applied as ControlFrame['controls']
     h.host.takeControl()
     await advance(50)
-    expect(h.client.getSnapshot()).toMatchObject({ canControl: false, canFly: true })
-    expect(h.state.controls).toMatchObject({ throttle: .73, pitchTrim: -.12, flaps: 1 / 3, aileron: 0, brake: 0 })
+    expect(h.client.getSnapshot()).toMatchObject({ canControl: true, canFly: false, status: { blend: 'computer' } })
+    expect(h.state.controls).toMatchObject({ throttle: .73, pitchTrim: -.12, flaps: 1 / 3, aileron: .8, brake: 1 })
     await h.fly()
     expect(h.client.setPaused(true)).toBe(true)
     await flush()
@@ -242,6 +242,43 @@ describe('phone controller', () => {
     expect(h.state).toMatchObject({ owner: 'local', paused: true })
     expect(h.client.getSnapshot()).toMatchObject({ canFly: true, canControl: false, pendingActions: 0 })
     expect(h.clientEndpoint).toHaveBeenCalledTimes(1)
+  })
+
+  it('changes priority through ordinary acknowledged actions while both control streams remain live', async () => {
+    const setPriority = vi.fn()
+    const h = await setup({}, { setPriority })
+    await advance(50)
+    await h.fly()
+    const firstGrant = h.hostLink.last('granted')
+    h.client.updateControls({ throttle: .78, aileron: .45 })
+    await advance(20)
+    h.state.controls = h.host.beforeStep(h.state.controls) as ControlFrame['controls']
+    setPriority.mockClear()
+    const framesBefore = h.phoneLink.native.filter(message => message.type === 'controls').length
+    h.host.noteLocalInput()
+    h.host.takeControl()
+    await flush()
+    expect(h.client.getSnapshot()).toMatchObject({ canControl: true, requestingControl: false, status: { owner: 'phone', blend: 'computer' } })
+    expect(setPriority).toHaveBeenLastCalledWith('computer')
+    expect(h.client.requestControl()).toBe(true)
+    const priorityRequest = h.phoneLink.last('action')
+    expect(priorityRequest).toMatchObject({ epoch: firstGrant.epoch, action: 'setPriority', value: 'phone' })
+    expect(h.client.getSnapshot()).toMatchObject({ canControl: true, requestingControl: false, pendingActions: 1 })
+    h.client.updateControls({ elevator: -.55 })
+    await advance(30)
+    expect(h.hostLink.last('ack')).toMatchObject({ id: priorityRequest.id, ok: true, epoch: firstGrant.epoch })
+    expect(h.client.getSnapshot()).toMatchObject({ canControl: true, requestingControl: false, status: { blend: 'phone' } })
+    expect(h.host.beforeStep(h.state.controls)).toMatchObject({ throttle: .78, aileron: .45, elevator: -.55 })
+    expect(h.phoneLink.native.filter(message => message.type === 'controls').length).toBeGreaterThan(framesBefore)
+    expect(h.hostLink.reliable.filter(message => message.type === 'handoff')).toHaveLength(1)
+    expect(h.hostLink.last('granted').epoch).toBe(firstGrant.epoch)
+    // Replaying a priority action returns its acknowledgement without another effect.
+    const changes = setPriority.mock.calls.length
+    h.hostLink.receiveReliable(priorityRequest)
+    expect(setPriority).toHaveBeenCalledTimes(changes)
+    expect(h.client.setPriority('computer')).toBe(true)
+    await flush()
+    expect(h.client.getSnapshot()).toMatchObject({ canControl: true, status: { blend: 'computer' } })
   })
 
   it('holds the starter on the wire only while the lever is held, and lets go when the phone drops off', async () => {
@@ -270,7 +307,7 @@ describe('phone controller', () => {
     h.phoneLink.dropNative = true
     await advance(2000)
     expect(h.host.isStarterHeld()).toBe(true)
-    await advance(300)
+    await advance(3100)
     expect(h.host.isStarterHeld()).toBe(false)
   })
 
@@ -342,9 +379,9 @@ describe('phone controller', () => {
     await advance(60)
     expect(h.phoneLink.last('controls').camera).toBeUndefined()
     expect(h.aimFrames).not.toHaveBeenCalled()
-    // The desktop taking the aircraft back ends the gesture: a phone that no
-    // longer controls anything cannot move the camera either.
-    h.host.takeControl()
+    // Voluntary release invalidates the old epoch and ends participation, so
+    // camera input cannot continue until the pilot asks to join again.
+    expect(h.client.releaseControl()).toBe(true)
     await advance(60)
     h.client.nudgeCamera({ yaw: 1, pitch: 0 })
     await advance(60)
@@ -462,6 +499,54 @@ describe('phone controller', () => {
     expect(h.phoneLink.last('controls').controls).toMatchObject({ throttle: .91, elevator: 0 })
   })
 
+  it('completes the same delayed handoff while the host automatically adjusts its controls', async () => {
+    const h = await setup({}, { getLocalInputRevision: () => 0 })
+    await advance(50)
+    h.hostLink.holdHandoff = true
+    expect(h.client.requestControl()).toBe(true)
+    await flush()
+    const handoff = h.hostLink.last('handoff')
+    // Automatic trim, flap changes and a smoothing throttle are not local input.
+    Object.assign(h.state.controls, { throttle: .7, pitchTrim: -.13, rollTrim: .01, flaps: .4 })
+    await advance(60)
+    expect(h.client.getSnapshot()).toMatchObject({ requestingControl: true, canControl: false })
+    h.hostLink.flushHeld()
+    await flush()
+    expect(h.hostLink.last('granted')).toMatchObject({ epoch: handoff.epoch, requestId: handoff.requestId })
+    expect(h.client.getSnapshot()).toMatchObject({ requestingControl: false, canControl: true })
+    await advance(150)
+    expect(h.state.owner).toBe('phone')
+    expect(h.client.getSnapshot().canControl).toBe(true)
+    expect(h.phoneLink.reliable.filter(message => message.type === 'action' && message.action === 'requestControl')).toHaveLength(1)
+  })
+
+  it('keeps actual position telemetry separate from commanded controls and phone authority', async () => {
+    const h = await setup()
+    await advance(50)
+    await h.fly()
+    const commanded = { throttle: .91, flaps: .8, rudder: -.6, pitchTrim: .2, rollTrim: -.15 }
+    h.client.updateControls(commanded)
+    h.state.actualControls = { throttle: .4, flaps: .3, rudder: -.1 }
+    await advance(100)
+    expect(h.client.getSnapshot()).toMatchObject({
+      canControl: true, controls: commanded,
+      status: { owner: 'phone', actualControls: h.state.actualControls },
+    })
+    h.state.actualControls = { throttle: .5, flaps: .45, rudder: -.3 }
+    await advance(100)
+    expect(h.client.getSnapshot()).toMatchObject({
+      canControl: true, controls: commanded,
+      status: { owner: 'phone', actualControls: h.state.actualControls },
+    })
+    // Bad presentation data is dropped without costing the heartbeat or grant.
+    Object.assign(h.state, { actualControls: { throttle: 'bad', flaps: 1.4, rudder: NaN } })
+    await advance(100)
+    expect(h.client.getSnapshot()).toMatchObject({ canControl: true, hostFresh: true, controls: commanded, status: { owner: 'phone' } })
+    expect(h.client.getSnapshot().status?.actualControls).toBeUndefined()
+    expect(h.phoneLink.last('controls').controls).toMatchObject(commanded)
+    expect(h.state.owner).toBe('phone')
+  })
+
   it.each(['stay', 'auto'] as const)('rejects malformed/replayed heartbeats, flies on through a lost link, and never regains authority from old epochs (%s)', async (handover) => {
     const h = await setup({}, { getSharing: () => ({ ...DEFAULT_CONTROL_SHARING, handover }) })
     await advance(50)
@@ -480,21 +565,17 @@ describe('phone controller', () => {
     expect(h.client.getSnapshot().lostMs).toBeGreaterThanOrEqual(200)
     expect(h.state).toMatchObject({ owner: 'phone', paused: false })
     // Past the hold, control comes back to the computer, without a pause.
-    await advance(2300)
+    await advance(5200)
     expect(h.state).toMatchObject({ owner: 'local', paused: false })
     expect(h.client.getSnapshot().canControl).toBe(false)
     h.phoneLink.receiveReliable({ ...old, type: 'granted', status: { ...h.state, owner: 'phone' } })
     expect(h.client.getSnapshot().canControl).toBe(false)
     h.hostLink.dropNative = false
     await advance(60)
-    if (handover === 'stay') {
-      expect(h.client.getSnapshot()).toMatchObject({ canFly: true, canControl: false, lostMs: null })
-      expect(h.state.paused).toBe(false)
-    } else {
-      // Back through a fresh handoff in a newer epoch, never the replayed grant.
-      expect(h.state).toMatchObject({ owner: 'phone', paused: false })
-      expect(h.hostLink.last('granted').epoch).toBeGreaterThan(old.epoch)
-    }
+    // Legacy handover choices cannot disable the shared model. Recovery uses
+    // a fresh handoff in a newer epoch, never the replayed grant.
+    expect(h.state).toMatchObject({ owner: 'phone', paused: false })
+    expect(h.hostLink.last('granted').epoch).toBeGreaterThan(old.epoch)
   })
 
   it('bounds an incomplete handoff without retrying or accepting its delayed grant', async () => {
@@ -592,7 +673,7 @@ describe('phone controller', () => {
     // Unheard, the computer takes control back past the hold, and hands it
     // back through a fresh handoff, never the abandoned one.
     const abandoned = h.hostLink.last('granted').epoch
-    await advance(2600)
+    await advance(5600)
     expect(h.state).toMatchObject({ owner: 'phone', paused: false })
     expect(h.hostLink.last('granted').epoch).toBeGreaterThan(abandoned)
     expect(h.client.getSnapshot().canControl).toBe(true)
@@ -606,7 +687,7 @@ describe('phone controller', () => {
     h.doc.dispatchEvent(new Event('visibilitychange'))
     await advance(350)
     expect(h.state).toMatchObject({ owner: 'phone', paused: false })
-    await advance(2000)
+    await advance(5000)
     expect(h.phoneLink.reliable.some(message => message.type === 'action' && message.action === 'releaseControl')).toBe(false)
     expect(h.state).toMatchObject({ owner: 'local', paused: false })
     // Offered back, but a hidden page asks for nothing.
@@ -618,18 +699,43 @@ describe('phone controller', () => {
     expect(h.client.getSnapshot()).toMatchObject({ canControl: true, status: { owner: 'phone', paused: false } })
   })
 
-  it('asks for control back once the computer offers it after flight input there', async () => {
+  it('keeps the phone participating after computer input without another request', async () => {
     const h = await setup()
     await advance(50)
     await h.fly()
     h.host.noteLocalInput()
     await advance(100)
-    expect(h.state.owner).toBe('local')
-    expect(h.client.getSnapshot()).toMatchObject({ canControl: false, requestingControl: false, status: { handBack: 'idle' } })
+    expect(h.state.owner).toBe('phone')
+    expect(h.client.getSnapshot()).toMatchObject({ canControl: true, requestingControl: false, status: { blend: 'phone' } })
     await advance(1000)
     expect(h.state).toMatchObject({ owner: 'phone', paused: false })
     expect(h.client.getSnapshot().canControl).toBe(true)
-    expect(h.phoneLink.reliable.filter(message => message.type === 'action' && message.action === 'requestControl')).toHaveLength(2)
+    expect(h.phoneLink.reliable.filter(message => message.type === 'action' && message.action === 'requestControl')).toHaveLength(1)
+  })
+
+  it('does not roll priority back when an older opposite-priority heartbeat follows the acknowledgement', async () => {
+    const h = await setup()
+    await advance(50)
+    await h.fly()
+    await advance(100)
+    const beforeComputerPriority = h.hostLink.last('heartbeat')
+    h.host.takeControl()
+    await flush()
+    expect(h.client.getSnapshot()).toMatchObject({ canControl: true, status: { blend: 'computer' } })
+    h.phoneLink.receiveNative({ ...beforeComputerPriority, lease: beforeComputerPriority.lease + 1,
+      status: { ...h.state, blend: 'phone' } })
+    expect(h.client.getSnapshot()).toMatchObject({ canControl: true, status: { blend: 'computer' } })
+    await advance(100)
+    const beforePhonePriority = h.hostLink.last('heartbeat')
+    expect(h.client.requestControl()).toBe(true)
+    await flush()
+    expect(h.client.getSnapshot()).toMatchObject({ canControl: true, status: { blend: 'phone' } })
+    h.phoneLink.receiveNative({ ...beforePhonePriority, lease: beforePhonePriority.lease + 1,
+      status: { ...h.state, blend: 'computer' } })
+    expect(h.client.getSnapshot()).toMatchObject({ canControl: true, requestingControl: false, status: { blend: 'phone' } })
+    h.client.updateControls({ elevator: -.4 })
+    await advance(20)
+    expect(h.phoneLink.last('controls').controls.elevator).toBe(-.4)
   })
 
   it('blending: the levers follow where the computer has them, but never drag back a move it has not applied', async () => {
@@ -672,18 +778,18 @@ describe('phone controller', () => {
     expect(h.phoneLink.last('controls').controls.brake).toBe(0)
   })
 
-  it('one device at a time, the levers stay where this phone put them', async () => {
+  it('shares live lever updates with the computer by default', async () => {
     const h = await setup()
     await advance(50)
     await h.fly()
     h.state.controls = { ...h.state.controls, throttle: .9 }
     h.host.beforeStep(h.state.controls)
     await advance(100)
-    expect(h.client.getSnapshot().controls.throttle).toBe(.67)
+    expect(h.client.getSnapshot().controls.throttle).toBe(.9)
   })
 
   it('asks again no faster than its interval while the computer keeps refusing', async () => {
-    const h = await setup({}, { getSharing: () => ({ ...DEFAULT_CONTROL_SHARING, handover: 'computer' }) })
+    const h = await setup({}, { isPageVisible: () => false })
     await advance(50)
     const askedAt: number[] = []
     const send = h.phoneLink.sendReliable.bind(h.phoneLink)
@@ -692,7 +798,7 @@ describe('phone controller', () => {
       if (message.type === 'action' && message.action === 'requestControl') askedAt.push(Date.now())
       return send(value)
     })
-    // A second of offers that the computer, latched to itself, refuses each time.
+    // A second of stale offers while the computer is hidden and refuses pairing.
     for (let step = 0; step < 20; step += 1) {
       const { session, epoch } = h.hostLink.last('heartbeat')
       h.phoneLink.receiveReliable({ v: 1, type: 'status', session, epoch, message: 'Offered', status: { ...h.state, owner: 'local', handBack: 'now' } })
@@ -704,13 +810,13 @@ describe('phone controller', () => {
     expect(h.hostLink.last('ack')).toMatchObject({ ok: false })
   })
 
-  it('recovers Fly after a refused takeover status and a newer heartbeat overtaking its retry', async () => {
+  it('recovers Fly after a refused reset status and a newer heartbeat overtaking its retry', async () => {
     const h = await setup()
     await advance(50)
     await h.fly()
     vi.spyOn(h.hostLink, 'sendReliable').mockImplementationOnce(() => false)
     h.hostLink.holdStatus = true
-    h.host.takeControl()
+    h.host.reset()
     await advance(60)
     // The new-epoch heartbeat revokes old input, but cannot grant authority.
     expect(h.state.owner).toBe('local')
@@ -718,8 +824,8 @@ describe('phone controller', () => {
     h.hostLink.holdStatus = false
     h.hostLink.flushHeld()
     await flush()
-    expect(h.client.getSnapshot()).toMatchObject({ canControl: false, canFly: true, status: { owner: 'local' } })
-    await h.fly()
+    expect(h.client.getSnapshot()).toMatchObject({ canControl: true, canFly: false, status: { owner: 'phone' } })
+    expect(h.phoneLink.reliable.filter(message => message.type === 'action' && message.action === 'requestControl')).toHaveLength(2)
     expect(h.state.paused).toBe(false)
   })
 
@@ -867,7 +973,7 @@ describe('phone haptics', () => {
     ['phone hidden', async (h: Awaited<ReturnType<typeof setup>>) => {
       Object.defineProperty(h.doc, 'hidden', { value: true, writable: true }); h.doc.dispatchEvent(new Event('visibilitychange'))
     }],
-    ['desktop retakes control', async (h: Awaited<ReturnType<typeof setup>>) => { h.host.takeControl(); await flush() }],
+    ['desktop reset', async (h: Awaited<ReturnType<typeof setup>>) => { h.host.reset(); await flush() }],
     ['desktop pause', async (h: Awaited<ReturnType<typeof setup>>) => { h.client.setPaused(true); await flush(); await flush() }],
     ['disconnect', async (h: Awaited<ReturnType<typeof setup>>) => { h.host.disconnect(); await flush() }],
     ['destroy', async (h: Awaited<ReturnType<typeof setup>>) => { h.client.destroy() }],

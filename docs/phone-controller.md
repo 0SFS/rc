@@ -7,7 +7,7 @@ to install and nothing to configure — both ends are just web pages.
 
 1. On the computer, open [flight mode](https://0sfs.github.io/fly/), then ⚙ → **Remote Control**.
 2. Scan the QR code with your phone camera.
-3. On the phone, tap **Take control** in the chip grid to take control.
+3. On the phone, tap **Take control** in the chip grid to join the shared controls with phone priority.
 
 A controller added to the Home Screen opens without an invitation, because the Camera app sends a
 scanned link to the browser rather than to the installed app. It pairs by reading the QR itself:
@@ -22,15 +22,21 @@ becomes the controller from the same tab: **Switch to RC mode** opens `/rc/` in 
 the tab leads with that button and makes no QR until asked. The icon still opens the simulator next
 time; an icon made from `/rc/` is named *0SFS RC* and always opens the controller.
 
-**Take control** preserves the simulator's current pause state; if the flight is paused, tap **▶** (Resume)
-in the grid separately. The one exception is the pause that hiding the desktop tab caused, which lifts
-when control comes back (see [Who flies](#who-flies)). The touch controller provides pitch/roll, rudder, throttle, trim, flaps, brake, pause,
-camera view, and release.
+**Take control** selects that device's priority and preserves the simulator's pause state.
+If the flight is paused, tap **▶** (Resume) in the grid separately. The touch controller provides
+pitch/roll, rudder, throttle, trim, flaps, brake, pause, and camera view.
 
 The controls sit where the desktop flight HUD puts them, so muscle memory carries between
 the two screens: the pitch/roll stick with roll trim above it, pitch trim on its left, the flaps lever
 on its right, and the trim-centring buttons in the corner above pitch trim; then yaw, brake and the
 throttle lever as the second group.
+
+On both screens, the round amber slider handle and its percentage show the command.
+A white I-beam marks the aircraft's actual position when it differs: flap travel,
+throttle position and yaw, plus the desktop's VTOL conversion lever. Hover or focus
+a slider to read both values. Unknown positions have no marker; the current models
+do not expose independent physical trim positions. Position feedback never moves
+the command handle or takes control.
 
 The controller page never scrolls. It is sized to the viewport so a control cannot move out from
 under a thumb mid-flight, and everything secondary collapses to make room: the instruments, the link
@@ -43,64 +49,46 @@ on wider screens they sit side by side exactly as the desktop does.
 The QR expires after two minutes and admits one phone. Leaving the tab hides it; **Disconnect**
 invalidates the invitation or ends the session.
 
-### Who flies
+### Shared controls and priority
 
-Once the phone has taken control, it keeps its claim to the controls until its pilot taps **Release**.
-Control can still be taken from it for a while: by flight input on the computer, by the desktop tab
-being hidden (which pauses the flight), or by phone input that stops arriving for longer than
-**Hold the phone's last command** (see [When the link drops](#when-the-link-drops)). What happens next
-is Remote Control → **Who flies** → **Control changes hands**:
+Once the phone joins, the computer's keys, gamepad and HUD and the phone's controls stay live together.
+A key pressed on the computer does not disconnect the phone or change priority. Both devices have a
+**Take control** button: on the phone it selects phone priority; in the computer's Remote Control tab
+it selects computer priority. The phone's status chip reads **Phone priority** or **Computer priority**.
+The same choice is in Remote Control → **Shared controls** → **Control priority**.
 
-| Choice | Flight input on the computer | Control goes back to the phone |
-| --- | --- | --- |
-| **Automatically** (default) | Takes control | By itself, once the computer's controls have rested for **Rest before returning** (1 s), the desktop tab is showing and the phone is heard from |
-| **Only when taken** | Takes control | When the phone's pilot taps **Take control**; a pause stays until someone resumes |
-| **Latched to the phone** | Does nothing while the phone flies | By itself, without waiting for the computer's controls to rest |
-| **Latched to this computer** | — | Never: the phone cannot take control |
+- Pitch, roll, rudder and brake mix. The priority device gets its input, and the other gets whatever
+  authority that leaves free. A full deflection on the priority device is all of the control; a centred
+  control leaves the whole range to the other device.
+- Throttle, trim and flaps go where either pilot last moved them. The priority device wins when both
+  move the same lever at once. Both screens follow the resulting command; a hardware lever resting
+  elsewhere waits until it is moved again.
+- Switching priority keeps the phone's held inputs and camera gestures active. It needs no new pairing,
+  centring step or handoff. Pausing also keeps both devices connected. Hiding the computer's flight
+  tab pauses the simulation and keeps the phone connected; resume explicitly when the tab returns.
 
-In every mode **Take control** in the Remote Control tab takes control here on purpose — while control
-is waiting to go back, the button reads **Keep control here** — and the phone then waits for its pilot
-to tap **Take control**. A phone disconnection pauses the flight and ends the session.
-
-The computer never resumes the flight by itself. When control goes back after the pause that hiding
-the desktop tab caused, the computer tells the phone that the pause is the phone's to lift, and the
-phone lifts it once it has heard that it is flying, so nothing flies under a phone that does not know
-it has the controls. A pause anyone chose in the meantime stays. A phone page loaded before this
-behaviour existed asks for nothing and keeps the pause; reload it.
+Older saved choices for exclusive control or automatic takeover no longer change this model.
+**Disconnect** in the computer's Remote Control tab ends the session deliberately.
 
 ### When the link drops
 
-Wi-Fi, a busy phone or a busy computer can hold up the link for a moment. Nothing pops up and nothing
-pauses:
+Wi-Fi, a busy phone or a busy computer can hold up the link for a moment. Nothing pops up:
 
-- The computer keeps flying the phone's last command — stick, rudder, brake, throttle, and a starter
-  held to start the engine — for **Hold the phone's last command** (2 s by default, up to 10 s), in
-  Remote Control → **Who flies**. Heard again within that, the phone flies on as if nothing happened.
-- The phone's controls stay live, and its **🌐** chip lights up and counts how long the computer has
-  gone unheard, in place of the round trip.
-- Past the hold, the stick, rudder, brake and starter let go, the levers stay where they are, and the
-  computer takes control without pausing. It goes back to the phone by itself once the phone is heard
-  again, as **Control changes hands** says.
-- The computer stalling — compiling shaders as an engine lights, say — does not count as the phone's
-  silence, and the phone stalling does not count on its 🌐 chip.
+- The computer holds the phone's last command — including a held stick, rudder, brake or starter —
+  during a gap of up to five seconds. Heard again within that time, the phone carries on with the same
+  priority and controls.
+- The phone's controls stay live, and its **🌐** chip counts how long the computer has gone unheard,
+  in place of the round trip. This warning does not change priority.
+- Only a gap longer than five seconds removes the phone's input. The stick, rudder, brake and starter
+  then let go; persistent levers stay where they were, and the computer continues without a pause.
+  The phone can join again when its connection recovers. A broken session or an incompatible protocol
+  may require a new QR.
+- The computer stalling — compiling shaders as an engine lights, for example — does not count as the
+  phone's silence, and the phone stalling does not count on its 🌐 chip.
 
-Both ends keep each loss and how long it lasted in their **Connection details** timeline. Hiding the
-controller — locking the phone, switching apps — sends a centred frame first, so the computer holds
-nothing deflected, and a page back within the hold flies on.
-
-**Sharing the controls**, in the same section, decides whether one device flies at a time, as above,
-or both. With **Blend both**, a phone that has taken control flies together with the computer, whose
-keys, gamepad and HUD stay live:
-
-- Pitch, roll, rudder and brake mix. The device chosen by **Blend priority** gets its input, and the
-  other gets whatever authority that leaves free, so a full deflection on the priority device is all of
-  the control and a centred one hands the whole control to the other.
-- Throttle, trim and flaps go where they were last moved, by either pilot, and the priority device's
-  move wins if both move one at once. The levers on both screens follow; a hardware lever resting
-  somewhere else waits until it is moved again.
-- Flight input on the computer never takes control from a blending phone. **Control changes hands**
-  then only decides whether the phone joins again by itself after a loss; **Latched to this computer**
-  keeps it out. The phone's link chip reads **BLEND**.
+Both ends keep each loss and its duration in **Connection details**. Hiding the controller — locking
+the phone or switching apps — sends a centred frame first, so the computer holds nothing deflected.
+Returning within five seconds preserves the connection.
 
 ## When pairing fails: read the connection details
 

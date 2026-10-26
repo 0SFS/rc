@@ -601,3 +601,112 @@
 .flight-hud__yaw-control input[type="range"] {
   touch-action: none;
 }
+
+/* The round native thumb is the command; a passive I-beam marks physical travel.
+   One thumb size fixes both endpoint offsets across browsers and orientations. */
+.flight-control-position {
+  --control-thumb: 10px;
+  --control-actual: 0;
+  position: relative;
+  display: grid;
+  min-width: 0;
+  min-height: 0;
+  align-self: stretch;
+}
+.flight-control-position--vertical { width: 14px; max-width: 100%; flex: 1 1 auto; }
+.flight-control-position--horizontal { width: 100%; align-self: center; }
+.flight-control-position > input[type="range"] {
+  grid-area: 1 / 1;
+  appearance: none;
+  -webkit-appearance: none;
+  border: 0;
+  border-radius: 0;
+  padding: 0;
+  background: transparent;
+  min-width: 0;
+}
+.flight-control-position--vertical > input[type="range"] { justify-self: center; }
+.flight-control-position > input[type="range"]::-webkit-slider-runnable-track {
+  width: 4px;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--ctl-line-strong);
+}
+.flight-control-position > input[type="range"]::-webkit-slider-thumb {
+  appearance: none;
+  -webkit-appearance: none;
+  width: var(--control-thumb);
+  height: var(--control-thumb);
+  border: 0;
+  border-radius: 50%;
+  background: var(--ctl-accent);
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.65);
+}
+.flight-control-position--horizontal > input[type="range"]::-webkit-slider-thumb { margin-top: -3px; }
+.flight-control-position--vertical > input[type="range"]::-webkit-slider-thumb { margin-left: -3px; }
+.flight-control-position--horizontal > input[type="range"]::-webkit-slider-runnable-track { width: 100%; }
+.flight-control-position--vertical > input[type="range"]::-webkit-slider-runnable-track { height: 100%; }
+.flight-control-position > input[type="range"]::-moz-range-track {
+  width: 4px;
+  height: 4px;
+  border-radius: 2px;
+  background: var(--ctl-line-strong);
+}
+.flight-control-position > input[type="range"]::-moz-range-thumb {
+  width: var(--control-thumb);
+  height: var(--control-thumb);
+  border: 0;
+  border-radius: 50%;
+  background: var(--ctl-accent);
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.65);
+}
+.flight-control-position--horizontal > input[type="range"]::-moz-range-track { width: 100%; }
+.flight-control-position--vertical > input[type="range"]::-moz-range-track { height: 100%; }
+.flight-control-position > input[type="range"]:focus-visible { outline: 2px solid var(--ctl-focus); outline-offset: 2px; }
+.flight-control-position__actual,
+.flight-throttle__actual {
+  position: absolute;
+  z-index: 2;
+  background: #e8eef0;
+  box-shadow: 0 0 0 1px rgba(10, 14, 22, 0.85);
+  pointer-events: none;
+}
+.flight-control-position__actual[hidden],
+.flight-throttle__actual[hidden] { display: none; }
+.flight-control-position--horizontal > .flight-control-position__actual {
+  top: 50%;
+  left: calc(var(--control-thumb) / 2 + (100% - var(--control-thumb)) * var(--control-actual));
+  width: 2px;
+  height: 14px;
+  transform: translate(-50%, -50%);
+}
+.flight-control-position--vertical > .flight-control-position__actual {
+  left: 50%;
+  bottom: calc(var(--control-thumb) / 2 + (100% - var(--control-thumb)) * var(--control-actual));
+  width: 14px;
+  height: 2px;
+  transform: translate(-50%, 50%);
+}
+.flight-control-position__actual::before,
+.flight-control-position__actual::after,
+.flight-throttle__actual::before,
+.flight-throttle__actual::after { content: ""; position: absolute; background: inherit; box-shadow: inherit; }
+.flight-control-position--horizontal > .flight-control-position__actual::before,
+.flight-control-position--horizontal > .flight-control-position__actual::after { left: -3px; width: 8px; height: 2px; }
+.flight-control-position--horizontal > .flight-control-position__actual::before { top: 0; }
+.flight-control-position--horizontal > .flight-control-position__actual::after { bottom: 0; }
+.flight-control-position--vertical > .flight-control-position__actual::before,
+.flight-control-position--vertical > .flight-control-position__actual::after,
+.flight-throttle__actual::before,
+.flight-throttle__actual::after { top: -3px; width: 2px; height: 8px; }
+.flight-control-position--vertical > .flight-control-position__actual::before,
+.flight-throttle__actual::before { left: 0; }
+.flight-control-position--vertical > .flight-control-position__actual::after,
+.flight-throttle__actual::after { right: 0; }
+.flight-throttle__actual {
+  left: 50%;
+  bottom: calc(var(--throttle-handle) / 2 + (100% - var(--throttle-handle)) * var(--throttle-actual));
+  width: calc(var(--throttle-handle) + 4px);
+  height: 2px;
+  transform: translate(-50%, 50%);
+}

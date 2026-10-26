@@ -61,11 +61,11 @@ export function createPhonePairingPanel(host: HTMLElement, session: PhoneControl
     newButton.disabled = state.phase === "preparing" || state.phase === "authenticating";
     newButton.textContent = state.phase === "paired" ? "Replace phone / New QR" : "Create new QR";
     copyButton.hidden = !state.invitationUrl;
-    // Also while control is due back to the phone: taking it here on purpose
-    // is the way to keep it, whatever Control changes hands says.
     const take = element<HTMLButtonElement>("[data-take]");
-    take.hidden = state.owner !== "phone" && !state.returning;
-    take.textContent = state.owner === "phone" ? "Take control" : "Keep control here";
+    take.hidden = state.phase !== "paired";
+    take.textContent = "Take control";
+    take.setAttribute("aria-pressed", String(state.priority === "computer"));
+    take.title = "Give this computer priority when both devices move a control. Both devices stay live.";
     element("[data-disconnect]").hidden = state.phase === "off" || state.phase === "expired" || state.phase === "error";
     expiry.textContent = state.expiresAt === null ? "" : `QR expires in ${Math.max(0, Math.ceil((state.expiresAt - performance.now()) / 1000))} seconds`;
     renderDiagnostics();

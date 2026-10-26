@@ -119,6 +119,33 @@ beforeEach(() => { vi.useFakeTimers(); mocks.MockPeer.instances.length = 0 })
 afterEach(() => { for (const endpoint of endpoints.splice(0)) endpoint.destroy(); vi.useRealTimers() })
 
 describe('PeerJS/native channel adapter', () => {
+  it('keeps multiplayer labels, public metadata and its smaller packet bound independent of the phone protocol', async () => {
+    const endpoint = createPeerEndpoint({ protocol: {
+      sessionLabel: 'mp-session-v1', nativeLabel: 'mp-pose-v1',
+      metadata: { v: 1, protocol: 'multiplayer' }, maxMessageBytes: 1100,
+    } })
+    endpoints.push(endpoint)
+    const peer = mocks.MockPeer.instances.at(-1)!
+    peer.registered()
+    const transport = endpoint.connect('other-pilot')
+    expect(peer.connect).toHaveBeenCalledWith('other-pilot', {
+      label: 'mp-session-v1', reliable: true, serialization: 'json', metadata: { v: 1, protocol: 'multiplayer' },
+    })
+    peer.connection.label = 'mp-session-v1'
+    peer.connection.opened()
+    await transport.ready
+    const opened = transport.openNative()
+    peer.connection.native!.open()
+    await opened
+    expect(peer.connection.peerConnection.createDataChannel).toHaveBeenCalledWith('mp-pose-v1', {
+      negotiated: true, id: 1, ordered: false, maxRetransmits: 0,
+    })
+    expect(transport.sendNative({ value: 'x'.repeat(1100) })).toBe(false)
+    expect(transport.sendReliable({ value: 'x'.repeat(1100) })).toBe(false)
+    const closed = vi.fn(); transport.onClose(closed)
+    peer.connection.receive(JSON.stringify({ value: 'x'.repeat(1100) }))
+    expect(closed).toHaveBeenCalledTimes(1)
+  })
   it('uses secure cloud signaling, the configured STUN list, public metadata, and pre-open subscriptions', async () => {
     const { endpoint, peer, transport, connection } = setup()
     expect(await endpoint.ready).toBe('test-peer')

@@ -67,6 +67,27 @@ afterEach(() => {
 });
 
 describe("phone pairing panel", () => {
+  it("selects computer priority without disconnecting the shared phone", () => {
+    state = { ...state, phase: "paired", owner: "phone", priority: "phone", invitationUrl: null,
+      message: "Phone priority · Both devices connected" };
+    mount();
+    const take = button("[data-take]");
+    expect(take.hidden).toBe(false);
+    expect(take.textContent).toBe("Take control");
+    expect(take.getAttribute("aria-pressed")).toBe("false");
+    expect(take.title).toContain("Both devices stay live");
+    take.click();
+    expect(takeControl).toHaveBeenCalledOnce();
+    expect(disconnect).not.toHaveBeenCalled();
+    expect(state.owner).toBe("phone");
+    update({ priority: "computer", message: "Computer priority · Both devices connected" });
+    expect(take.getAttribute("aria-pressed")).toBe("true");
+    expect(take.disabled).toBe(false);
+    expect(state.owner).toBe("phone");
+    update({ phase: "off" });
+    expect(take.hidden).toBe(true);
+  });
+
   it("starts pairing as a computer opens it and displays a locally rendered invitation", async () => {
     expect(qr.toCanvas).not.toHaveBeenCalled();
     mount();
