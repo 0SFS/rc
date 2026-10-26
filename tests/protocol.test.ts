@@ -106,6 +106,17 @@ describe("phone protocol parsing", () => {
     }
   });
 
+  it("accepts an optional afterburner detent within the throttle's travel", () => {
+    for (const afterburnerDetent of [undefined, 0, 0.99, 1]) {
+      expect(parseMessage({ ...envelope, type: "heartbeat", lease: 1,
+        status: { ...status, afterburnerDetent } })).not.toBeNull();
+    }
+    for (const afterburnerDetent of [null, -0.1, 1.5, Number.NaN, "0.99"]) {
+      expect(parseMessage({ ...envelope, type: "heartbeat", lease: 1,
+        status: { ...status, afterburnerDetent } })).toBeNull();
+    }
+  });
+
   it("accepts an optional six-digit aircraft afterburner accent and rejects arbitrary colors", () => {
     for (const afterburnerColor of [undefined, "#ff9450", "#A0B1C2"]) {
       expect(isEngineStatus({ phase: "RUNNING", afterburnerColor })).toBe(true);

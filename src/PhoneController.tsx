@@ -132,7 +132,7 @@ export function PhoneController({ client, onPair }: { client: PhoneControllerCli
         {/* The desktop HUD's own throttle lever, engine start and shutdown included. */}
         <PhoneThrottle value={state.controls.throttle} brake={state.leverBrake} brakeRange={status?.throttleBrakeRange === true}
           actualThrottle={status?.actualControls?.throttle}
-          keepBrakes={status?.keepSliderBrakes === true} engine={engine} disabled={locked}
+          keepBrakes={status?.keepSliderBrakes === true} afterburnerDetent={status?.afterburnerDetent} engine={engine} disabled={locked}
           onChange={throttle} onPowerChange={power} onStartHold={starter} onShutdown={shutdown} />
       </div>
       {/* Everything that is not a flight surface, in one chip grid at FOSS Earth

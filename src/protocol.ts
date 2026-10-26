@@ -88,6 +88,8 @@ export interface AircraftStatus {
   throttleBrakeRange?: boolean;
   /** Retain the combined lever's brake setting after release; false/absent springs back to idle. */
   keepSliderBrakes?: boolean;
+  /** The throttle where one push of the lever stops short of afterburner; absent lets one push light it. */
+  afterburnerDetent?: number;
   /** Absent from a host with no engine reading yet, and from one that predates this field. */
   engine?: EngineStatus;
   /**
@@ -361,6 +363,7 @@ function status(value: unknown): value is AircraftStatus {
     && (value.gearDown === undefined || typeof value.gearDown === "boolean")
     && (value.throttleBrakeRange === undefined || typeof value.throttleBrakeRange === "boolean")
     && (value.keepSliderBrakes === undefined || typeof value.keepSliderBrakes === "boolean")
+    && (value.afterburnerDetent === undefined || (finite(value.afterburnerDetent) && value.afterburnerDetent >= 0 && value.afterburnerDetent <= 1))
     && (value.engine === undefined || isEngineStatus(value.engine));
   // An offer, never authority: a malformed one is dropped on its own, and the
   // phone then simply waits to be asked, as it would from an older computer.

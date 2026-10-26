@@ -256,6 +256,15 @@ describe('phone controller screen', () => {
     expect(updatePower).toHaveBeenLastCalledWith({ throttle: 0, brake: keepSliderBrakes ? 1 : 0 })
   })
 
+  it.each([undefined, 0.99])('stops one push of the throttle at the host afterburner detent %s', afterburnerDetent => {
+    mount({ status: { throttleBrakeRange: true, afterburnerDetent } })
+    const slider = container.querySelector<HTMLElement>('.phone-throttle [data-control="throttle"]')!
+    act(() => { slider.dispatchEvent(new KeyboardEvent('keydown', { key: 'End', bubbles: true })) })
+    expect(updatePower).toHaveBeenLastCalledWith({ throttle: afterburnerDetent ?? 1, brake: 0 })
+    act(() => { slider.dispatchEvent(new KeyboardEvent('keydown', { key: 'End', bubbles: true })) })
+    expect(updatePower).toHaveBeenLastCalledWith({ throttle: 1, brake: 0 })
+  })
+
   it('puts nothing above the controls for a lost link: the 🌐 chip counts how long, and the controls stay live', () => {
     mount({ snapshot: { hostFresh: false, lostMs: 1200, message: 'Connection lost · Waiting for the computer' } })
     // jsdom offers no fullscreen, so no popup either: the controls are the page.
