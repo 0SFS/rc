@@ -229,13 +229,24 @@ export interface PhoneControllerSettings {
   yawReturnMs: number;
   /** Touchdown pulses, where the phone's browser can vibrate. */
   haptics: boolean;
+  /**
+   * What two fingers do on the camera pad: `both` turns the view with the
+   * point between them as they move and zooms as they spread, at once;
+   * `zoom` only zooms. Additive on v1: settings without it are read as
+   * `both`, the default.
+   */
+  twoFingers: "both" | "zoom";
 }
 export const MAX_YAW_RETURN_MS = 1500;
+/** Settings from a peer that predates `twoFingers` lack it; it is read with its default. */
 export function isPhoneControllerSettings(value: unknown): value is PhoneControllerSettings {
-  return record(value) && (value.grid === "bottom" || value.grid === "top")
+  if (!(record(value) && (value.grid === "bottom" || value.grid === "top")
     && (value.yawRelease === "center" || value.yawRelease === "hold")
     && finite(value.yawReturnMs) && value.yawReturnMs >= 0 && value.yawReturnMs <= MAX_YAW_RETURN_MS
-    && typeof value.haptics === "boolean";
+    && typeof value.haptics === "boolean"
+    && (value.twoFingers === undefined || value.twoFingers === "both" || value.twoFingers === "zoom"))) return false;
+  value.twoFingers ??= "both";
+  return true;
 }
 /**
  * The phone controller's settings, both ways on the reliable channel. The

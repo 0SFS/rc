@@ -566,4 +566,31 @@ describe('phone controller screen', () => {
     touch('pointerup', 140, 120)
     expect(setCameraFingers.mock.calls.map(([count]) => count)).toEqual([1, 0])
   })
+
+  it('turns the view with two fingers unless Settings says they only zoom, and remembers that', () => {
+    const twoFingersMove = () => {
+      const pad = container.querySelector('.phone-camera')!
+      const touch = (type: string, pointerId: number, x: number, y: number) => {
+        const event = new Event(type, { bubbles: true, cancelable: true })
+        Object.assign(event, { pointerId, clientX: x, clientY: y, button: 0 })
+        act(() => { pad.dispatchEvent(event) })
+      }
+      nudgeCamera.mockClear()
+      touch('pointerdown', 1, 100, 100)
+      touch('pointerdown', 2, 200, 100)
+      touch('pointermove', 1, 140, 100)
+      touch('pointermove', 2, 240, 100)
+      touch('pointerup', 1, 140, 100)
+      touch('pointerup', 2, 240, 100)
+      return nudgeCamera.mock.calls.reduce((total, [move]) => total + move.yaw, 0)
+    }
+    mount()
+    expect(twoFingersMove()).toBeGreaterThan(0)
+    act(() => { container.querySelector<HTMLInputElement>('.phone-settings input[name="phone-two-fingers"][value="zoom"]')!.click() })
+    expect(updateSettings).toHaveBeenLastCalledWith({ twoFingers: 'zoom' })
+
+    remount({ snapshot: { settings: { ...DEFAULT_PHONE_SETTINGS, twoFingers: 'zoom' } } })
+    expect(container.querySelector<HTMLInputElement>('.phone-settings input[name="phone-two-fingers"][value="zoom"]')!.checked).toBe(true)
+    expect(twoFingersMove()).toBe(0)
+  })
 })

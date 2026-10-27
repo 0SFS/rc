@@ -32,10 +32,11 @@ export function PhoneController({ client, onPair }: { client: PhoneControllerCli
   const status = state.status;
   const fullscreen = useFullscreenOffer();
   // The computer keeps these with its own settings; the client keeps this phone's copy.
-  const { grid: gridPosition, yawRelease, yawReturnMs } = state.settings;
+  const { grid: gridPosition, yawRelease, yawReturnMs, twoFingers } = state.settings;
   const moveGrid = useCallback((grid: GridPosition) => client.updateSettings({ grid }), [client]);
   const yaw = useMemo((): YawSettings => ({ release: yawRelease, returnMs: yawReturnMs }), [yawRelease, yawReturnMs]);
   const changeYaw = useCallback((settings: YawSettings) => client.updateSettings({ yawRelease: settings.release, yawReturnMs: settings.returnMs }), [client]);
+  const changeTwoFingers = useCallback((next: typeof twoFingers) => client.updateSettings({ twoFingers: next }), [client]);
   const rudder = useCallback((value: number) => client.updateControls({ rudder: value }), [client]);
   const stick = useCallback((x: number, y: number, input?: InputTiming) => client.updateControls({ aileron: x, elevator: -y }, input), [client]);
   // The desktop's own drag signs: right orbits right, down lifts the camera.
@@ -127,7 +128,7 @@ export function PhoneController({ client, onPair }: { client: PhoneControllerCli
         {/* The view switch sits over the pad's corner, not inside it: a switch
             inside the pad's button would be a button in a button. */}
         <div className="phone-camera-slot">
-          <PhoneCameraPad disabled={locked} onGesture={camera} onFingers={cameraFingers} />
+          <PhoneCameraPad disabled={locked} onGesture={camera} onFingers={cameraFingers} twoFingers={twoFingers} />
           <PhoneViewSwitch mode={status?.viewMode} disabled={locked} onChange={mode => client.setViewMode(mode)} />
         </div>
         {/* The desktop HUD's own throttle lever, engine start and shutdown included. */}
@@ -179,7 +180,8 @@ export function PhoneController({ client, onPair }: { client: PhoneControllerCli
           <span className="phone-sr-only">{state.sendHz === null ? "Not sending" : `${state.sendHz} control frames a second`}</span>
         </span>
         <PhoneFullscreenButton offer={fullscreen} />
-        <PhoneSettings gridPosition={gridPosition} onGridPositionChange={moveGrid} yaw={yaw} onYawChange={changeYaw} />
+        <PhoneSettings gridPosition={gridPosition} onGridPositionChange={moveGrid} yaw={yaw} onYawChange={changeYaw}
+          twoFingers={twoFingers} onTwoFingersChange={changeTwoFingers} />
         <PhoneBrowserData />
         {/* Last in the grid. A chip like the rest, held rather than tapped. */}
         <PhoneBrake disabled={locked} onChange={brake} />

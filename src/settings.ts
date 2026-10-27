@@ -225,6 +225,22 @@ export const REMOTE_CONTROL_PARAMETERS = [
     appliesLive: true,
     source: "rc/src/phoneControllerClient.ts",
   },
+  {
+    id: "osfs.phone.twoFingers",
+    label: "Two fingers on the phone camera pad",
+    description: "What two fingers on the phone's camera pad do: turn the view as they move and zoom as they spread, at once, or only zoom.",
+    unit: "none",
+    kind: "choice",
+    choices: [
+      { id: "both", label: "Orbit and zoom", description: "The view turns with the point between the fingers, as one finger turns it, while spreading or closing them zooms." },
+      { id: "zoom", label: "Zoom only", description: "Two fingers only zoom, so a pinch never turns the view; one finger turns it." },
+    ],
+    default: "both",
+    defaultReason: "As this computer's touchscreen does: two fingers turn the chase camera as they move and zoom it as they spread.",
+    home: main(PHONE_CONTROLLER),
+    appliesLive: true,
+    source: "rc/src/PhoneStick.tsx",
+  },
 ] as const satisfies readonly ParameterSpec[];
 
 /** The effective value of each of the phone remote control's parameters, by id. */

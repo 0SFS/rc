@@ -1,5 +1,6 @@
 import { useCallback, useEffect, useLayoutEffect, useRef, type KeyboardEvent, type PointerEvent } from 'react'
 import type { InputTiming } from './phoneControllerClient'
+import type { PhoneControllerSettings } from './protocol'
 
 interface PhoneStickProps { label: string; horizontal?: boolean; disabled: boolean; onChange(x: number, y: number, input?: InputTiming): void }
 
@@ -168,9 +169,14 @@ interface PhoneCameraPadProps {
    * can glide a swipe on when they lift and stop it when one lands.
    */
   onFingers?(count: number, input?: InputTiming): void
+  /**
+   * What two fingers do, ⚙ Settings → Camera pad: `both` turns the view with
+   * the point between them while their spread zooms; `zoom` only zooms.
+   */
+  twoFingers?: PhoneControllerSettings['twoFingers']
 }
 
-export function PhoneCameraPad({ disabled, onGesture, onFingers }: PhoneCameraPadProps) {
+export function PhoneCameraPad({ disabled, onGesture, onFingers, twoFingers = 'both' }: PhoneCameraPadProps) {
   const surface = useRef<HTMLButtonElement>(null)
   /** Every finger currently down, so a second one can start a pinch mid-swipe. */
   const points = useRef(new Map<number, { x: number; y: number }>())
@@ -214,14 +220,16 @@ export function PhoneCameraPad({ disabled, onGesture, onFingers }: PhoneCameraPa
     const delta = { x: event.clientX - previous.x, y: event.clientY - previous.y }
     points.current.set(event.pointerId, { x: event.clientX, y: event.clientY })
     if (points.current.size > 1) {
-      // Two fingers are a pinch, and only a pinch: swiping with both would
-      // otherwise double the orbit while the view is being sized.
       const current = distance()
       const previousSpread = spread.current
       spread.current = current
-      if (current !== null && previousSpread !== null && previousSpread > 0 && current > 0) {
-        onGesture({ yaw: 0, pitch: 0, zoom: current / previousSpread }, timing(event))
-      }
+      const zoom = current !== null && previousSpread !== null && previousSpread > 0 && current > 0 ? current / previousSpread : 1
+      // The point between the fingers moves half as far as the one that moved,
+      // so two moving together turn the view as far as one finger does. Zoom
+      // only keeps two fingers a pinch, which then never turns it.
+      const turn = twoFingers === 'both' ? .5 / GESTURE_SCALE : 0
+      const gesture = { yaw: delta.x * turn, pitch: delta.y * turn }
+      if (zoom !== 1 || gesture.yaw !== 0 || gesture.pitch !== 0) onGesture(zoom === 1 ? gesture : { ...gesture, zoom }, timing(event))
       return
     }
     if (delta.x === 0 && delta.y === 0) return

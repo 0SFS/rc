@@ -1104,6 +1104,25 @@ describe('phone controller settings', () => {
     expect(prefs.map.get('osfs.phone-yaw-release')).toBe('hold')
   })
 
+  it('turns the view with two fingers on the camera pad unless its pilot chose zoom only, here and on the computer', async () => {
+    const prefs = storage()
+    const held = computer()
+    const h = await setup({ storage: prefs }, { phoneSettings: held })
+    await flush()
+    expect(h.client.getSnapshot().settings.twoFingers).toBe('both')
+    h.client.updateSettings({ twoFingers: 'zoom' })
+    await flush()
+    expect(held.held().twoFingers).toBe('zoom')
+    expect(prefs.map.get('osfs.phone-two-fingers')).toBe('zoom')
+  })
+  it('brings a Zoom only kept on the phone to a computer that still has the default', async () => {
+    const held = computer()
+    const h = await setup({ storage: storage({ 'osfs.phone-two-fingers': 'zoom' }) }, { phoneSettings: held })
+    await flush()
+    expect(held.held().twoFingers).toBe('zoom')
+    expect(h.client.getSnapshot().settings.twoFingers).toBe('zoom')
+  })
+
   it('keeps its own settings with a computer that does not keep them', async () => {
     const prefs = storage({ 'osfs.phone-grid-position': 'top' })
     const h = await setup({ storage: prefs })

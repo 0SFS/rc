@@ -167,7 +167,8 @@ describe('desktop phone control session', () => {
 
     // Its first: kept only where this computer still has the default.
     from({ grid: 'top', yawRelease: 'hold', yawReturnMs: 500, haptics: false }, 1, { initial: true })
-    const merged = { grid: 'top', yawRelease: 'hold', yawReturnMs: 300, haptics: false }
+    // It sends no camera pad setting, as a phone that predates it would, so the default stands in for it.
+    const merged = { grid: 'top', yawRelease: 'hold', yawReturnMs: 300, haptics: false, twoFingers: 'both' }
     expect(set).toHaveBeenLastCalledWith(merged)
     expect(transport.last('settings')).toMatchObject({ settings: merged, rev: 1 })
 

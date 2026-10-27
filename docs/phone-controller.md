@@ -199,7 +199,7 @@ above the throttle. Where the browser can hide its own bars it asks once, in a p
 button in its grid after that. On an iPhone, where Safari has no page fullscreen at all, that popup
 explains why rather than only saying "add it to your Home Screen": what the bars cost, that nothing
 is missing or for sale, the three options that exist, and — folded away for whoever wants it — the
-whole technical case, including why another browser on the same phone changes nothing. ⚙ Settings moves the chip grid above or below the controls, and decides whether the
+whole technical case, including why another browser on the same phone changes nothing. ⚙ Settings moves the chip grid above or below the controls, chooses what two fingers do on the camera pad, and decides whether the
 yaw slider returns to centre when you let go — and how long that return takes — or keeps the
 deflection until you move it again.
 
@@ -265,6 +265,11 @@ at the gesture's speed when the fingers lift, slowing to a stop, and stops where
 lands on the pad again. A finger that rests before lifting has no speed left to glide with.
 **Glide** 0 draws every movement at once. A phone that predates this does not say when its fingers
 lift, so the computer ends its gesture once it has been still for 48 ms.
+
+Two fingers turn the view and zoom it at once, as the computer's touchscreen does: the point between
+them turns it as far as one finger would, and spreading or closing them zooms. ⚙ Settings →
+**Camera pad** → **Zoom only** makes two fingers a pinch that never turns the view. Either way,
+lifting one of the two lets the zoom glide on, and the finger left goes on turning the view.
 
 ## Specification
 

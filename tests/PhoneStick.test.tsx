@@ -90,7 +90,7 @@ describe('phone touch controls', () => {
 
   it('reads the camera pad as swipes and pinches rather than a position', () => {
     const gesture = vi.fn()
-    act(() => root.render(<PhoneCameraPad disabled={false} onGesture={gesture} />))
+    act(() => root.render(<PhoneCameraPad disabled={false} onGesture={gesture} twoFingers="zoom" />))
     const pad = container.querySelector('button')!
     expect(pad.className).toBe('phone-camera')
     // Not a flight control: it must not tell anyone to raise the nose.
@@ -106,7 +106,7 @@ describe('phone touch controls', () => {
     pointer(pad, 'pointermove', 1, 130, 90)
     expect(gesture).not.toHaveBeenCalled()
 
-    // A second finger turns the gesture into a pinch, and only a pinch.
+    // With Zoom only, a second finger turns the gesture into a pinch, and only a pinch.
     pointer(pad, 'pointerdown', 2, 230, 90)
     expect(gesture).not.toHaveBeenCalled()
     pointer(pad, 'pointermove', 2, 280, 90)
@@ -117,6 +117,31 @@ describe('phone touch controls', () => {
     pointer(pad, 'pointerup', 2)
     gesture.mockClear()
     pointer(pad, 'pointermove', 1, 140, 90)
+    expect(gesture).toHaveBeenLastCalledWith({ yaw: .01, pitch: 0 }, timed)
+  })
+
+  it('turns the view with the point between two fingers while their spread zooms, by default', () => {
+    const gesture = vi.fn()
+    act(() => root.render(<PhoneCameraPad disabled={false} onGesture={gesture} />))
+    const pad = container.querySelector('button')!
+    const moved = () => gesture.mock.calls.reduce((total, [move]) => ({
+      yaw: total.yaw + move.yaw, pitch: total.pitch + move.pitch, zoom: total.zoom * (move.zoom ?? 1),
+    }), { yaw: 0, pitch: 0, zoom: 1 })
+    pointer(pad, 'pointerdown', 1, 100, 100)
+    pointer(pad, 'pointerdown', 2, 200, 100)
+    // Both 20 px right and 10 px down, one after the other as a phone reports
+    // them: the view turns as far as one finger would turn it, and does not zoom.
+    pointer(pad, 'pointermove', 1, 120, 110)
+    pointer(pad, 'pointermove', 2, 220, 110)
+    expect(moved().yaw).toBeCloseTo(.02, 12)
+    expect(moved().pitch).toBeCloseTo(.01, 12)
+    expect(moved().zoom).toBeCloseTo(1, 12)
+    // One spreads 50 px away: a zoom, and the point between them turns the view half as far.
+    pointer(pad, 'pointermove', 2, 270, 110)
+    expect(gesture).toHaveBeenLastCalledWith({ yaw: .025, pitch: 0, zoom: 1.5 }, timed)
+    // Lifting one finger swipes on from where the other one is, at a finger's rate.
+    pointer(pad, 'pointerup', 1)
+    pointer(pad, 'pointermove', 2, 280, 110)
     expect(gesture).toHaveBeenLastCalledWith({ yaw: .01, pitch: 0 }, timed)
   })
 

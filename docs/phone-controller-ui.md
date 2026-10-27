@@ -166,7 +166,9 @@ whole page, and the check enforces it.
 ### The camera trackpad
 
 The pad in the HUD's engine-monitor slot is a **trackpad, not a stick**: one
-finger swipes the chase view, two pinch it closer or further. Nothing about it
+finger swipes the chase view, and two turn it with the point between them as
+they pinch it closer or further (⚙ Settings → Camera pad → **Zoom only** makes
+two fingers only pinch). Nothing about it
 is a position, so it draws no knob and there is nothing to centre — let go and
 the view stays where you put it, the way dragging the desktop canvas does. The
 dot grid is what says "drag here" in the absence of a knob.

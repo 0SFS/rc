@@ -1,15 +1,20 @@
 import { YAW_RETURN_MS_MAX, YAW_RETURN_MS_STEP, type GridPosition, type YawRelease, type YawSettings } from './phoneSettingsStore'
+import type { PhoneControllerSettings } from './protocol'
+
+type TwoFingers = PhoneControllerSettings['twoFingers']
 
 /**
  * The controller's settings: a ⚙ chip in the grid that opens as a full-screen
  * sheet, the way Connection details does, so a settings page never competes
  * with the controls for room.
  */
-export function PhoneSettings({ gridPosition, onGridPositionChange, yaw, onYawChange }: {
+export function PhoneSettings({ gridPosition, onGridPositionChange, yaw, onYawChange, twoFingers, onTwoFingersChange }: {
   gridPosition: GridPosition
   onGridPositionChange(position: GridPosition): void
   yaw: YawSettings
   onYawChange(settings: YawSettings): void
+  twoFingers: TwoFingers
+  onTwoFingersChange(twoFingers: TwoFingers): void
 }) {
   const option = (position: GridPosition, label: string) => (
     <label className="phone-settings__choice">
@@ -25,6 +30,13 @@ export function PhoneSettings({ gridPosition, onGridPositionChange, yaw, onYawCh
       <span>{label}</span>
     </label>
   )
+  const twoFingersOption = (choice: TwoFingers, label: string) => (
+    <label className="phone-settings__choice">
+      <input type="radio" name="phone-two-fingers" value={choice} checked={twoFingers === choice}
+        onChange={() => onTwoFingersChange(choice)} />
+      <span>{label}</span>
+    </label>
+  )
   return <details className="phone-sheet phone-settings">
     <summary>
       <span className="phone-sheet__chip" aria-hidden="true">⚙</span>
@@ -36,6 +48,14 @@ export function PhoneSettings({ gridPosition, onGridPositionChange, yaw, onYawCh
       <div className="phone-settings__choices">
         {option('bottom', 'Bottom')}
         {option('top', 'Top')}
+      </div>
+    </fieldset>
+    <fieldset className="phone-settings__option">
+      <legend>Camera pad</legend>
+      <p>Two fingers on the camera pad: moving them turns the view as one finger does while spreading or closing them zooms, or they only zoom.</p>
+      <div className="phone-settings__choices">
+        {twoFingersOption('both', 'Orbit and zoom')}
+        {twoFingersOption('zoom', 'Zoom only')}
       </div>
     </fieldset>
     <fieldset className="phone-settings__option">

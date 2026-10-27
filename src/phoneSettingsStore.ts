@@ -29,7 +29,7 @@ export interface YawSettings { release: YawRelease; returnMs: number }
  * values are the defaults there; a test keeps the two in step.
  */
 export const DEFAULT_PHONE_SETTINGS: Readonly<PhoneControllerSettings> = Object.freeze({
-  grid: 'bottom', yawRelease: 'center', yawReturnMs: 0, haptics: false,
+  grid: 'bottom', yawRelease: 'center', yawReturnMs: 0, haptics: false, twoFingers: 'both',
 })
 
 /** The keys predate the computer holding these, and are kept so a phone's choices carry over. */
@@ -38,6 +38,7 @@ const KEYS = {
   yawRelease: 'osfs.phone-yaw-release',
   yawReturnMs: 'osfs.phone-yaw-return-ms',
   haptics: 'osfs.phone-haptics',
+  twoFingers: 'osfs.phone-two-fingers',
 } as const satisfies Record<keyof PhoneControllerSettings, string>
 
 export type PhoneSettingsStorage = Pick<Storage, 'getItem' | 'setItem'>
@@ -53,6 +54,7 @@ export function loadPhoneSettings(storage: PhoneSettingsStorage | null): PhoneCo
       yawRelease: storage.getItem(KEYS.yawRelease) === 'hold' ? 'hold' : 'center',
       yawReturnMs: Number.isFinite(returnMs) ? Math.min(YAW_RETURN_MS_MAX, Math.max(0, Math.round(returnMs))) : 0,
       haptics: storage.getItem(KEYS.haptics) === 'on',
+      twoFingers: storage.getItem(KEYS.twoFingers) === 'zoom' ? 'zoom' : 'both',
     }
   } catch { return { ...DEFAULT_PHONE_SETTINGS } }
 }
@@ -63,5 +65,6 @@ export function savePhoneSettings(storage: PhoneSettingsStorage | null, settings
     storage?.setItem(KEYS.yawRelease, settings.yawRelease)
     storage?.setItem(KEYS.yawReturnMs, String(settings.yawReturnMs))
     storage?.setItem(KEYS.haptics, settings.haptics ? 'on' : 'off')
+    storage?.setItem(KEYS.twoFingers, settings.twoFingers)
   } catch { /* Private browsing: the choice lasts for this visit only. */ }
 }

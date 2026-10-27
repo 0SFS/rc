@@ -39,7 +39,10 @@ Line numbers are as of 2026-09-17. Search by name if they have drifted.
    [`src/remote/PhoneStick.tsx`](../src/PhoneStick.tsx) (`move`, about line 188)
    tracks each pointer separately.
    - One finger reports a delta in CSS pixels ÷ 1000.
-   - Two fingers are a pinch only, reported as a spread ratio.
+   - Two fingers, by default, report half of each moving finger's delta, so
+     the point between them turns the view as one finger does, and the
+     spread ratio as a zoom. With ⚙ Settings → Camera pad → Zoom only they
+     are a pinch only.
 2. **Buffering on the phone.** `nudgeCamera` in
    [`src/remote/phoneControllerClient.ts`](../src/phoneControllerClient.ts)
    (about line 530) adds the delta to a pending `camera` total and calls `sendControls`.

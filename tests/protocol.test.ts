@@ -312,9 +312,14 @@ describe("phone protocol parsing", () => {
   });
 
   it("carries the phone controller's settings both ways, bounded, with no epoch to match", () => {
-    const settings = { grid: "top", yawRelease: "hold", yawReturnMs: 450, haptics: true };
+    const settings = { grid: "top", yawRelease: "hold", yawReturnMs: 450, haptics: true, twoFingers: "zoom" };
     const message = { v: 1, type: "settings", session: "s", epoch: 0, settings, rev: 3 };
     expect(parseMessage(message)).toEqual(message);
+    // A peer that predates the camera pad's setting is read with its default.
+    const older: Partial<typeof settings> = { ...settings };
+    delete older.twoFingers;
+    expect(parseMessage({ ...message, settings: older })).toEqual({ ...message, settings: { ...older, twoFingers: "both" } });
+    expect(parseMessage({ ...message, settings: { ...settings, twoFingers: "orbit" } })).toBeNull();
     expect(parseMessage({ ...message, initial: true })).toEqual({ ...message, initial: true });
     // Only `true` means initial; anything else is an ordinary change.
     expect(parseMessage({ ...message, initial: "yes" })).toEqual(message);
