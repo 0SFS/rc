@@ -1,4 +1,4 @@
-import { useCallback, useEffect, useRef, type KeyboardEvent, type PointerEvent } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useRef, type KeyboardEvent, type PointerEvent } from 'react'
 import type { InputTiming } from './phoneControllerClient'
 
 interface PhoneStickProps { label: string; horizontal?: boolean; disabled: boolean; onChange(x: number, y: number, input?: InputTiming): void }
@@ -160,18 +160,33 @@ const GESTURE_SCALE = 1000
 const KEY_STEP = 30 / GESTURE_SCALE
 interface CameraGesture { yaw: number; pitch: number; zoom?: number }
 
-export function PhoneCameraPad({ disabled, onGesture }: { disabled: boolean; onGesture(gesture: CameraGesture, input?: InputTiming): void }) {
+interface PhoneCameraPadProps {
+  disabled: boolean
+  onGesture(gesture: CameraGesture, input?: InputTiming): void
+  /**
+   * How many fingers are on the pad, each time that changes, so the computer
+   * can glide a swipe on when they lift and stop it when one lands.
+   */
+  onFingers?(count: number, input?: InputTiming): void
+}
+
+export function PhoneCameraPad({ disabled, onGesture, onFingers }: PhoneCameraPadProps) {
   const surface = useRef<HTMLButtonElement>(null)
   /** Every finger currently down, so a second one can start a pinch mid-swipe. */
   const points = useRef(new Map<number, { x: number; y: number }>())
   const spread = useRef<number | null>(null)
+  // `release` stays one callback for the listeners it is registered with.
+  const reportFingers = useRef(onFingers)
+  useLayoutEffect(() => { reportFingers.current = onFingers })
   const release = useCallback(() => {
     for (const id of points.current.keys()) {
       if (surface.current?.hasPointerCapture?.(id)) surface.current.releasePointerCapture(id)
     }
+    const held = points.current.size > 0
     points.current.clear()
     spread.current = null
     surface.current?.removeAttribute('data-active')
+    if (held) reportFingers.current?.(0)
   }, [])
   useEffect(() => { if (disabled) release() }, [disabled, release])
   useEffect(() => {
@@ -219,6 +234,7 @@ export function PhoneCameraPad({ disabled, onGesture }: { disabled: boolean; onG
     // continues the swipe from where it is instead of jumping.
     spread.current = distance()
     if (points.current.size === 0) surface.current?.removeAttribute('data-active')
+    onFingers?.(points.current.size, timing(event))
   }
   return <button ref={surface} type="button" className="phone-camera" disabled={disabled}
     aria-label="Camera. Swipe to look around, pinch with two fingers to zoom; arrow keys also work."
@@ -229,6 +245,7 @@ export function PhoneCameraPad({ disabled, onGesture }: { disabled: boolean; onG
       event.currentTarget.setPointerCapture(event.pointerId)
       event.currentTarget.setAttribute('data-active', '')
       spread.current = distance()
+      onFingers?.(points.current.size, timing(event))
     }} onPointerMove={move}
     onPointerUp={lift} onPointerCancel={lift} onLostPointerCapture={lift}
     onKeyDown={event => {

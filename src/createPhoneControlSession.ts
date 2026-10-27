@@ -661,6 +661,13 @@ export function createPhoneControlSession(options: PhoneControlSessionOptions) {
       const movement = aim.take(now());
       return snapshot.owner === "phone" ? movement : null;
     },
+    /**
+     * The fingers on the phone's camera pad as of the movement the last
+     * `takeCameraAim` drew, so the host can glide a gesture on when they lift
+     * and stop the glide when one lands. Null while the phone does not fly or
+     * does not say.
+     */
+    cameraFingers: (): number | null => snapshot.owner === "phone" ? aim.fingers() : null,
     /** Movement has arrived that a later frame still has to draw: keep frames coming. */
     hasPendingCameraAim: () => snapshot.owner === "phone" && aim.pending(),
     /** Whether a gesture is still in progress, so auto-recenter can wait for it. */

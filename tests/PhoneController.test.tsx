@@ -25,6 +25,7 @@ let root: Root
 let container: HTMLDivElement
 let storage: Map<string, string>
 const nudgeCamera = vi.fn()
+const setCameraFingers = vi.fn()
 const updateControls = vi.fn()
 const updatePower = vi.fn()
 const setPaused = vi.fn(() => true)
@@ -61,7 +62,7 @@ function mount({ engine, status, snapshot, onPair }: {
     log: createConnectionLog('phone', () => 0),
     subscribe: listener => { listeners.add(listener); return () => { listeners.delete(listener) } },
     getSnapshot: () => state,
-    updateControls, updatePower, nudgeCamera, cancelTransientControls: vi.fn(), requestControl,
+    updateControls, updatePower, nudgeCamera, setCameraFingers, cancelTransientControls: vi.fn(), requestControl,
     setPaused, setViewMode, setGearDown: () => true, setStarterHeld, shutdownEngine, releaseControl: () => true, setPriority: () => true,
     setHapticsEnabled, updateSettings, destroy: vi.fn(),
   }
@@ -104,6 +105,7 @@ beforeEach(() => {
     removeItem: (key: string) => { storage.delete(key) },
   })
   nudgeCamera.mockClear()
+  setCameraFingers.mockClear()
   updateControls.mockClear()
   updatePower.mockClear()
   setPaused.mockClear()
@@ -554,10 +556,14 @@ describe('phone controller screen', () => {
       act(() => { pad.dispatchEvent(event) })
     }
     touch('pointerdown', 100, 100)
+    expect(setCameraFingers.mock.calls.map(([count]) => count)).toEqual([1])
     // Down and to the right, the way dragging the desktop canvas goes.
     touch('pointermove', 140, 120)
     const [{ yaw, pitch }] = nudgeCamera.mock.calls.at(-1)!
     expect(yaw).toBeGreaterThan(0)
     expect(pitch).toBeGreaterThan(0)
+    // The computer glides the swipe on from the lift.
+    touch('pointerup', 140, 120)
+    expect(setCameraFingers.mock.calls.map(([count]) => count)).toEqual([1, 0])
   })
 })

@@ -390,6 +390,47 @@ describe('phone controller', () => {
     expect(h.host.isCameraActive()).toBe(false)
   })
 
+  it('tells the computer how many fingers are on the camera pad, as of the touch that changed it', async () => {
+    const h = await setup()
+    await advance(50)
+    await h.fly()
+    const controlFrames = () => h.phoneLink.native.filter((message): message is ControlFrame => message.type === 'controls')
+    await advance(20)
+    // A finger landing is news before it moves: the computer stops its glide.
+    const touchedAt = Date.now() - 1
+    h.client.setCameraFingers(1, { at: touchedAt })
+    await advance(20)
+    expect(controlFrames().find(message => message.aim?.down === 1)).toMatchObject({ aim: { yaw: 0, pitch: 0, zoom: 0, t: touchedAt } })
+    h.host.takeCameraAim()
+    expect(h.host.cameraFingers()).toBe(1)
+    // An unchanged count is not news.
+    h.client.setCameraFingers(1.2)
+    h.client.nudgeCamera({ yaw: .02, pitch: 0 }, { at: Date.now() })
+    await advance(5)
+    const liftedAt = Date.now()
+    h.client.setCameraFingers(0, { at: liftedAt })
+    await advance(20)
+    // The lift is stamped at the touch, so the computer reads it where the swipe before it ends.
+    const lift = controlFrames().find(message => message.aim?.down === 0)!
+    expect(lift.aim!.yaw).toBeCloseTo(.02)
+    expect(lift.aim!.t).toBeGreaterThanOrEqual(liftedAt)
+    expect(lift.aim!.t).toBeLessThan(liftedAt + 1)
+    await advance(40)
+    expect(h.host.takeCameraAim()!.yaw).toBeCloseTo(.02)
+    expect(h.host.cameraFingers()).toBe(0)
+    // Without control nothing is sent, but the count is the pad's: the next flight starts from it.
+    expect(h.client.releaseControl()).toBe(true)
+    await advance(60)
+    const released = controlFrames().length
+    h.client.setCameraFingers(2)
+    await advance(60)
+    expect(controlFrames().slice(released).some(message => message.aim?.down === 2)).toBe(false)
+    await h.fly()
+    h.client.nudgeCamera({ yaw: 0, pitch: 0, zoom: 1.1 })
+    await advance(20)
+    expect(controlFrames().at(-1)!.aim).toMatchObject({ down: 2 })
+  })
+
   it('sends once per touch frame when the computer asks, carrying the running total', async () => {
     const tuning = { ...DEFAULT_PHONE_CAMERA_TUNING, send: 'timer' as const }
     const h = await setup({ postTask: task => { setTimeout(task, 0) } }, { getCameraTuning: () => tuning })

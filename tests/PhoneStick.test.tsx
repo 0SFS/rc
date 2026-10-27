@@ -119,4 +119,34 @@ describe('phone touch controls', () => {
     pointer(pad, 'pointermove', 1, 140, 90)
     expect(gesture).toHaveBeenLastCalledWith({ yaw: .01, pitch: 0 }, timed)
   })
+
+  it('reports how many fingers are on the camera pad each time that changes', () => {
+    const fingers = vi.fn()
+    act(() => root.render(<PhoneCameraPad disabled={false} onGesture={vi.fn()} onFingers={fingers} />))
+    const pad = container.querySelector('button')!
+    const counts = () => fingers.mock.calls.map(([count]) => count)
+    pointer(pad, 'pointerdown', 1)
+    expect(fingers).toHaveBeenLastCalledWith(1, timed)
+    pointer(pad, 'pointerdown', 2, 150, 100)
+    // A moving finger changes no count, and a third is not the pad's.
+    pointer(pad, 'pointermove', 2, 160, 100)
+    pointer(pad, 'pointerdown', 3, 50, 50)
+    expect(counts()).toEqual([1, 2])
+    pointer(pad, 'pointerup', 2)
+    expect(fingers).toHaveBeenLastCalledWith(1, timed)
+    // The capture a lift loses is the same lift.
+    pointer(pad, 'lostpointercapture', 2)
+    pointer(pad, 'pointercancel', 1)
+    expect(counts()).toEqual([1, 2, 1, 0])
+
+    // Fingers the page stops tracking lift with no touch to time them by.
+    pointer(pad, 'pointerdown', 1)
+    act(() => { window.dispatchEvent(new Event('blur')) })
+    expect(fingers).toHaveBeenLastCalledWith(0)
+    act(() => { window.dispatchEvent(new Event('blur')) })
+    expect(counts()).toEqual([1, 2, 1, 0, 1, 0])
+    pointer(pad, 'pointerdown', 1)
+    act(() => root.render(<PhoneCameraPad disabled onGesture={vi.fn()} onFingers={fingers} />))
+    expect(counts()).toEqual([1, 2, 1, 0, 1, 0, 1, 0])
+  })
 })

@@ -151,10 +151,18 @@ export function isAiming(aim: CameraAim | undefined): boolean {
  *
  * Additive on v1 beside `camera`, which a phone keeps sending for hosts that
  * predate this. Never a control: it cannot refresh a lease or take authority.
+ *
+ * `down` is how many fingers are on the camera pad as of `t`, so the receiver
+ * glides a swipe or pinch on when they lift and stops the glide when one
+ * lands. Additive on v1: a phone that predates it sends none, and the receiver
+ * then ends a gesture once its movement has been quiet. An older receiver
+ * ignores it.
  */
-export interface CameraTotal { yaw: number; pitch: number; zoom: number; t: number }
+export interface CameraTotal { yaw: number; pitch: number; zoom: number; t: number; down?: number }
 /** A billion pixels of swiping: far beyond any flight, and still exact in a double. */
 export const MAX_CAMERA_TOTAL = 1e6;
+/** More fingers than a camera pad can tell apart. */
+export const MAX_CAMERA_FINGERS = 10;
 export function isCameraTotal(value: unknown): value is CameraTotal {
   return record(value) && ["yaw", "pitch", "zoom"].every(key => finite(value[key]) && Math.abs(value[key] as number) <= MAX_CAMERA_TOTAL)
     && finite(value.t);
@@ -418,6 +426,8 @@ export function parseMessage(input: unknown): RemoteMessage | null {
       // its own rather than costing the frame its control surfaces.
       if (valid && value.camera !== undefined && !isCameraAim(value.camera)) delete value.camera;
       if (valid && value.aim !== undefined && !isCameraTotal(value.aim)) delete value.aim;
+      if (valid && record(value.aim) && value.aim.down !== undefined && !(Number.isInteger(value.aim.down)
+        && (value.aim.down as number) >= 0 && (value.aim.down as number) <= MAX_CAMERA_FINGERS)) delete value.aim.down;
       if (valid && value.trace !== undefined && !isControlTrace(value.trace)) delete value.trace;
       if (valid && value.starter !== undefined && value.starter !== 1) delete value.starter;
       break;

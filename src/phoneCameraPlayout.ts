@@ -3,8 +3,8 @@ import type { PhoneCameraTuning } from "./phoneCameraTuning";
 
 /** Where the gesture has got to: swipe in pads, pinch as a natural log. */
 interface Position { yaw: number; pitch: number; zoom: number }
-/** A position and the phone time it was true at. */
-interface Sample extends Position { stamp: number }
+/** A position, the fingers on the pad, and the phone time both were true at. */
+interface Sample extends Position { stamp: number; down: number | null }
 
 /** How long the fastest delivery is remembered; longer rides out a quiet spell. */
 const TRANSIT_WINDOW_MS = 2_000;
@@ -31,12 +31,18 @@ const lerp = (from: Position, to: Position, amount: number): Position => ({
 export type PhoneCameraPresentation = Pick<PhoneCameraTuning, "source" | "present" | "bufferMs" | "catchUp" | "predictMs">;
 
 export interface PhoneCameraReceiver {
-  /** An accepted control frame, in sequence order. True when it moved the camera. */
+  /** An accepted control frame, in sequence order. True when it moved the camera or changed the fingers on the pad. */
   receive(frame: ControlFrame, receivedAt: number): boolean;
   /** The movement to draw this rendered frame, or null for none. */
   take(now: number): CameraAim | null;
-  /** Movement has arrived that has not been drawn yet. */
+  /** Movement, or a change in the fingers on the pad, has arrived that has not been drawn yet. */
   pending(): boolean;
+  /**
+   * The fingers on the phone's camera pad as of what the last `take` drew: in
+   * playout, at the playhead's phone time; on arrival, in the newest frame.
+   * Null while the phone does not say (one that predates `CameraTotal.down`).
+   */
+  fingers(): number | null;
   /** When the camera last received movement. */
   lastMovementAt(): number;
   reset(): void;
@@ -69,10 +75,12 @@ export function createPhoneCameraReceiver(getTuning: () => PhoneCameraPresentati
   let transits: Array<{ at: number; transit: number }> = [];
   let playhead: number | null = null;
   let lastTakeAt: number | null = null;
+  let newestDown: number | null = null;
+  let drawnDown: number | null = null;
 
   const reset = () => {
     space = null; summed = copy(ZERO); newest = drawn = null; movedAt = -Infinity;
-    samples = []; transits = []; playhead = null; lastTakeAt = null;
+    samples = []; transits = []; playhead = null; lastTakeAt = null; newestDown = drawnDown = null;
   };
 
   const fastestTransit = (now: number) => {
@@ -97,6 +105,21 @@ export function createPhoneCameraReceiver(getTuning: () => PhoneCameraPresentati
     const ahead = Math.min(stamp - before.stamp, predictMs) / (before.stamp - previous.stamp);
     return lerp(previous, before, 1 + ahead);
   };
+  /**
+   * The fingers down at phone time `stamp`, from the sample `positionAt` draws
+   * from: a lift reads only once the movement before it has been drawn, and
+   * a landing as soon as any of the movement it brought is.
+   */
+  const downAt = (stamp: number): number | null => {
+    let index = samples.length - 1;
+    while (index > 0 && samples[index].stamp > stamp) index -= 1;
+    const before = samples[index];
+    const after = samples[index + 1];
+    // Fewer fingers cannot have made the movement toward more: it is the new touch's.
+    if (after && before.down !== null && after.down !== null && after.down > before.down
+      && stamp > Math.max(before.stamp, after.stamp - MAX_SEGMENT_MS)) return after.down;
+    return before.down;
+  };
 
   const playout = (now: number, tuning: PhoneCameraPresentation): Position => {
     const last = samples[samples.length - 1];
@@ -114,6 +137,7 @@ export function createPhoneCameraReceiver(getTuning: () => PhoneCameraPresentati
     }
     // Keep the sample at or before the playhead; older ones can never be drawn again.
     while (samples.length > 2 && samples[1].stamp <= playhead - MAX_SEGMENT_MS) samples.shift();
+    drawnDown = downAt(playhead);
     return positionAt(playhead, tuning.predictMs);
   };
 
@@ -147,22 +171,25 @@ export function createPhoneCameraReceiver(getTuning: () => PhoneCameraPresentati
       if (moved && tuning.present === "arrival" && receivedAt - movedAt > STALE_MS) drawn = copy(newest!);
       if (moved) movedAt = receivedAt;
       const stamp = frame.aim?.t;
+      const down = frame.aim?.down ?? null;
+      const counted = down !== newestDown;
       const latest = samples[samples.length - 1];
       if (stamp !== undefined && latest && stamp <= latest.stamp) {
         // Not later than the newest sample: the phone promises this never
         // happens, and the newer position is still the one to end on.
-        samples[samples.length - 1] = { ...position, stamp: latest.stamp };
+        samples[samples.length - 1] = { ...position, stamp: latest.stamp, down };
       } else if (stamp !== undefined) {
         // A movement with no sample before it: the finger was at rest until just before.
-        if (!samples.length && moved) samples.push({ ...newest!, stamp: stamp - MAX_SEGMENT_MS });
-        samples.push({ ...position, stamp });
+        if (!samples.length && moved) samples.push({ ...newest!, stamp: stamp - MAX_SEGMENT_MS, down: newestDown });
+        samples.push({ ...position, stamp, down });
         if (samples.length > MAX_SAMPLES) samples.shift();
         const transit = receivedAt - stamp;
         while (transits.length && transits[transits.length - 1].transit >= transit) transits.pop();
         transits.push({ at: receivedAt, transit });
       }
       newest = position;
-      return moved;
+      newestDown = down;
+      return moved || counted;
     },
     take(now) {
       if (!newest || !drawn) return null;
@@ -172,6 +199,7 @@ export function createPhoneCameraReceiver(getTuning: () => PhoneCameraPresentati
         target = playout(now, tuning);
       } else {
         playhead = null;
+        drawnDown = newestDown;
         if (now - movedAt > STALE_MS) { drawn = copy(newest); lastTakeAt = now; return null; }
         target = newest;
       }
@@ -181,7 +209,8 @@ export function createPhoneCameraReceiver(getTuning: () => PhoneCameraPresentati
       if (same(movement, ZERO)) return null;
       return { yaw: movement.yaw, pitch: movement.pitch, zoom: Math.exp(movement.zoom) };
     },
-    pending: () => Boolean(newest && drawn && !same(newest, drawn)),
+    pending: () => Boolean(newest && drawn && (!same(newest, drawn) || drawnDown !== newestDown)),
+    fingers: () => drawnDown,
     lastMovementAt: () => movedAt,
     reset,
   };

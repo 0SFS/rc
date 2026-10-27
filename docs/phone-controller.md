@@ -259,6 +259,13 @@ For the lowest delay, set **Draw movement** to **As soon as it arrives**. **Phon
 is how the trackpad first worked: on a timer, losing lost frames, drawn on arrival. The costs quoted
 come from simulated measurements, not from a device.
 
+The camera glides as FOSS Earth's does, with the same setting: Aircraft → Camera → **Glide** on
+the computer (FOSS Earth's `camera.inertiaDecay`, 0.82). It eases into each swipe and pinch, goes on
+at the gesture's speed when the fingers lift, slowing to a stop, and stops where it is when a finger
+lands on the pad again. A finger that rests before lifting has no speed left to glide with.
+**Glide** 0 draws every movement at once. A phone that predates this does not say when its fingers
+lift, so the computer ends its gesture once it has been still for 48 ms.
+
 ## Specification
 
 [docs/proposals/phone-controller.md](proposals/phone-controller.md) has the control protocol, failure

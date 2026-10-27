@@ -40,6 +40,7 @@ export function PhoneController({ client, onPair }: { client: PhoneControllerCli
   const stick = useCallback((x: number, y: number, input?: InputTiming) => client.updateControls({ aileron: x, elevator: -y }, input), [client]);
   // The desktop's own drag signs: right orbits right, down lifts the camera.
   const camera = useCallback((gesture: { yaw: number; pitch: number; zoom?: number }, input?: InputTiming) => client.nudgeCamera(gesture, input), [client]);
+  const cameraFingers = useCallback((count: number, input?: InputTiming) => client.setCameraFingers(count, input), [client]);
   const brake = useCallback((held: boolean) => client.updateControls({ brake: held ? 1 : 0 }), [client]);
   const throttle = useCallback((value: number) => client.updateControls({ throttle: value }), [client]);
   const power = useCallback((command: { throttle: number; brake: number }) => client.updatePower(command), [client]);
@@ -126,7 +127,7 @@ export function PhoneController({ client, onPair }: { client: PhoneControllerCli
         {/* The view switch sits over the pad's corner, not inside it: a switch
             inside the pad's button would be a button in a button. */}
         <div className="phone-camera-slot">
-          <PhoneCameraPad disabled={locked} onGesture={camera} />
+          <PhoneCameraPad disabled={locked} onGesture={camera} onFingers={cameraFingers} />
           <PhoneViewSwitch mode={status?.viewMode} disabled={locked} onChange={mode => client.setViewMode(mode)} />
         </div>
         {/* The desktop HUD's own throttle lever, engine start and shutdown included. */}

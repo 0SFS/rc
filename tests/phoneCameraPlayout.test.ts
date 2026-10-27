@@ -132,6 +132,74 @@ describe("phone camera receiver", () => {
     expect(receiver.take(1)!.yaw).toBeCloseTo(.02);
   });
 
+  it("reads the fingers on the pad where it draws: on arrival from the newest frame, in playout at the playhead", () => {
+    const counted = (total: number, t: number, down?: number): ControlFrame => {
+      const value = frame(0, total, t);
+      return { ...value, aim: { ...value.aim!, ...(down === undefined ? {} : { down }) } };
+    };
+    const arrival = setup({ source: "total" }).receiver;
+    expect(arrival.fingers()).toBeNull();
+    // A phone that predates the count says nothing.
+    arrival.receive(counted(0, 0), 0);
+    arrival.take(1);
+    expect(arrival.fingers()).toBeNull();
+    // A finger landing is news though nothing moved, read once drawn.
+    expect(arrival.receive(counted(0, 16, 1), 17)).toBe(true);
+    expect(arrival.fingers()).toBeNull();
+    expect(arrival.pending()).toBe(true);
+    arrival.take(18);
+    expect(arrival.fingers()).toBe(1);
+    expect(arrival.pending()).toBe(false);
+    arrival.receive(counted(.02, 32, 1), 33);
+    arrival.receive(counted(.03, 40, 0), 41);
+    expect(yawOf(arrival.take(42))).toBeCloseTo(.03);
+    expect(arrival.fingers()).toBe(0);
+    arrival.reset();
+    expect(arrival.fingers()).toBeNull();
+
+    const playout = setup({ source: "total", present: "playout", bufferMs: 12 }).receiver;
+    // The phone's clock runs 1000 ms ahead of this one, and every frame arrives at once.
+    playout.receive(counted(0, 1000, 1), 0);
+    playout.take(0);
+    expect(playout.fingers()).toBe(1);
+    let drawn = 0;
+    for (let index = 1; index <= 4; index += 1) {
+      playout.receive(counted(index * .01, 1000 + index * 16, 1), index * 16);
+      drawn += yawOf(playout.take(index * 16));
+    }
+    // The last movement and the lift in one frame: the lift reads with the
+    // rendered frame that draws the end of that movement, not on arrival.
+    playout.receive(counted(.05, 1080, 0), 80);
+    drawn += yawOf(playout.take(80));
+    expect(playout.fingers()).toBe(1);
+    expect(playout.pending()).toBe(true);
+    const last = yawOf(playout.take(96));
+    expect(last).toBeGreaterThan(0);
+    expect(playout.fingers()).toBe(0);
+    expect(drawn + last).toBeCloseTo(.05, 6);
+    expect(playout.pending()).toBe(false);
+  });
+
+  it("counts a finger that landed and moved in one frame with the first of that movement drawn", () => {
+    const counted = (total: number, t: number, down: number): ControlFrame => {
+      const value = frame(0, total, t);
+      return { ...value, aim: { ...value.aim!, down } };
+    };
+    const { receiver } = setup({ source: "total", present: "playout", bufferMs: 12 });
+    // The phone's timer frames with nothing on the pad, then a touch that has already moved.
+    for (let index = 0; index < 3; index += 1) {
+      receiver.receive(counted(0, 1000 + index * 16, 0), index * 16);
+      receiver.take(index * 16);
+      expect(receiver.fingers()).toBe(0);
+    }
+    receiver.receive(counted(.02, 1048, 1), 48);
+    let drawn = 0;
+    for (let now = 48; drawn === 0 && now <= 128; now += 16) drawn = yawOf(receiver.take(now));
+    expect(drawn).toBeGreaterThan(0);
+    expect(drawn).toBeLessThan(.02);
+    expect(receiver.fingers()).toBe(1);
+  });
+
   it("forgets everything on reset", () => {
     const { receiver } = setup({ source: "total" });
     receiver.receive(frame(0, .05, 0), 0);

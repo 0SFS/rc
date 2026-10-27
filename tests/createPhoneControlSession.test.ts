@@ -202,6 +202,36 @@ describe('desktop phone control session', () => {
     expect(transport.close).not.toHaveBeenCalled()
   })
 
+  it('reads the fingers on the phone camera pad, and only while the phone flies', async () => {
+    const frames = vi.fn()
+    const h = setup({ getCameraTuning: () => ({ ...DEFAULT_PHONE_CAMERA_TUNING, present: 'arrival' }), onCameraAim: frames })
+    const transport = await h.pair()
+    expect(h.session.cameraFingers()).toBeNull()
+    const handoff = h.grant(transport)
+    const frame = (seq: number, yaw: number, down?: number) => ({
+      v: 1, type: 'controls', session: handoff.session, epoch: handoff.epoch, seq, lease: handoff.lease, controls: handoff.controls,
+      aim: { yaw, pitch: 0, zoom: 0, t: seq * 16, ...(down === undefined ? {} : { down }) },
+    })
+    // A phone that predates the count says nothing.
+    transport.receiveNative(frame(1, 0))
+    h.session.takeCameraAim()
+    expect(h.session.cameraFingers()).toBeNull()
+    // A finger landing asks for a frame even before it moves, so a paused view stops its glide.
+    frames.mockClear()
+    transport.receiveNative(frame(2, 0, 1))
+    expect(frames).toHaveBeenCalledTimes(1)
+    expect(h.session.hasPendingCameraAim()).toBe(true)
+    h.session.takeCameraAim()
+    expect(h.session.cameraFingers()).toBe(1)
+    expect(h.session.hasPendingCameraAim()).toBe(false)
+    transport.receiveNative(frame(3, .02, 0))
+    expect(h.session.takeCameraAim()!.yaw).toBeCloseTo(.02)
+    expect(h.session.cameraFingers()).toBe(0)
+    transport.receiveNative(frame(4, .02, 1))
+    h.session.reset()
+    expect(h.session.cameraFingers()).toBeNull()
+  })
+
   it('reports what became of every control frame to an opt-in trace, and only then asks the phone for timings', async () => {
     const plain = setup()
     const plainTransport = await plain.pair()

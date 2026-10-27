@@ -187,6 +187,8 @@ interface ControlFrameV1 {
   };
   // What the camera trackpad did since the last frame; absent when it did nothing.
   camera?: { yaw: number; pitch: number; zoom?: number };
+  // The camera gesture so far this epoch, as of phone time t, and the fingers on the pad.
+  aim?: { yaw: number; pitch: number; zoom: number; t: number; down?: number };
 }
 ```
 
@@ -197,7 +199,7 @@ authority, and malformed aim is dropped on its own rather than costing the frame
 A peer that never sends it behaves exactly as before. It carries gesture *deltas*, not a position or a
 rate — `yaw`/`pitch` are the swipe in CSS pixels scaled by 1/1000 and bounded to `[-1, 1]`, and `zoom`
 is a pinch ratio bounded to `[0.5, 2]` per frame. The desktop sums the frames it receives and draws
-the total once per rendered frame, so a dropped frame costs that frame's movement and nothing more. The status frame carries the desktop's engine reading the same way, in an
+the total once per rendered frame, so a dropped frame costs that frame's movement and nothing more. A phone also sends `aim`, the gesture's running total (`CameraTotal` in `src/protocol.ts`), from which the desktop recovers lost frames; its optional `down` is how many fingers are on the pad, so the desktop glides a swipe or pinch on when they lift and stops the glide when one lands. The status frame carries the desktop's engine reading the same way, in an
 optional `engine` field — a `phase` label plus `n1`, `n2`, `rpm`, `thrustLbf`, `fuelFlowPph` and
 `fuelFlowGph`, everything the HUD's engine widget draws, each absent rather than zero when the flight
 model does not publish it. Three more fields carry engine start and shutdown, all additive on v1. The

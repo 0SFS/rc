@@ -1,7 +1,7 @@
 import { createPeerEndpoint, type PeerEndpoint, type SessionTransport, type TransportDiagnostics } from './peerTransport'
 import { createConnectionLog, describeIceFailure, type ConnectionLog } from './connectionDiagnostics'
 import {
-  CONTROL_INTERVAL_MS, HANDOFF_MS, MAX_CAMERA_ZOOM_STEP, MAX_HAPTIC_PULSE_MS, MAX_TRACE_EVENTS, MIN_CAMERA_ZOOM_STEP,
+  CONTROL_INTERVAL_MS, HANDOFF_MS, MAX_CAMERA_FINGERS, MAX_CAMERA_ZOOM_STEP, MAX_HAPTIC_PULSE_MS, MAX_TRACE_EVENTS, MIN_CAMERA_ZOOM_STEP,
   NEUTRAL_CAMERA_AIM, NEUTRAL_CONTROLS, STALE_MS, isAiming,
   isCameraAim, isCentered, isControls, neutralize, parseMessage, isProtocolVersionMismatch, PROTOCOL_MISMATCH_MESSAGE,
   isPhoneControllerSettings,
@@ -69,6 +69,12 @@ export interface PhoneControllerClient {
    * is actually sent, so a gesture is never lost to a frame that never left.
    */
   nudgeCamera(delta: CameraAim, input?: InputTiming): void
+  /**
+   * How many fingers are on the camera trackpad, sent on the running total as
+   * `down`, so the computer glides a swipe or pinch on when they lift and
+   * stops the glide when one lands.
+   */
+  setCameraFingers(count: number, input?: InputTiming): void
   cancelTransientControls(): void
   requestControl(): boolean
   /** Change which connected pilot's input wins, without interrupting either control stream. */
@@ -178,6 +184,8 @@ export function createPhoneControllerClient(
   let aimUsed = false
   let aimStamp = -Infinity
   let aimMovedAt: number | null = null
+  // Fingers on the camera trackpad. Physical, so a new epoch keeps it.
+  let aimFingers = 0
   // When frames leave: chosen by the computer on its heartbeat.
   let sendMode: ControlSendMode = 'timer'
   let lastInputAt = -Infinity
@@ -369,7 +377,7 @@ export function createPhoneControllerClient(
     // since; always later than the previous frame's, so the timeline only runs forward.
     const stamp = Math.round(Math.max(aimStamp + .01, aimMovedAt ?? time) * 100) / 100
     const total: { aim: CameraTotal } | null = aimUsed ? { aim: {
-      yaw: micro(aimTotal.yaw), pitch: micro(aimTotal.pitch), zoom: micro(aimTotal.zoom), t: stamp,
+      yaw: micro(aimTotal.yaw), pitch: micro(aimTotal.pitch), zoom: micro(aimTotal.zoom), t: stamp, down: aimFingers,
     } } : null
     const trace: { trace: ControlTrace } | null = traceRequested ? { trace: {
       at: tenth(time), by, gated: traceGated, buf: transport.nativeBufferedAmount,
@@ -864,6 +872,17 @@ export function createPhoneControllerClient(
       aimUsed = true
       aimMovedAt = Math.max(aimMovedAt ?? -Infinity, input?.at ?? now())
       // The camera never renders a value, so this never needs a re-render.
+      inputChanged()
+    },
+    setCameraFingers(count, input) {
+      if (!Number.isFinite(count)) return
+      const fingers = Math.max(0, Math.min(MAX_CAMERA_FINGERS, Math.round(count)))
+      if (fingers === aimFingers) return
+      aimFingers = fingers
+      if (!snapshot.canControl || finished) return
+      // Stamped at the touch, so the computer reads it where the movement before it ends.
+      aimUsed = true
+      aimMovedAt = Math.max(aimMovedAt ?? -Infinity, input?.at ?? now())
       inputChanged()
     },
     cancelTransientControls,

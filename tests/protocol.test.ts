@@ -267,6 +267,16 @@ describe("phone protocol parsing", () => {
     expect(isAiming({ yaw: 0, pitch: 0, zoom: 1.01 })).toBe(true);
   });
 
+  it("keeps a camera total whose finger count is malformed, without the count", () => {
+    const aim = { yaw: 0.2, pitch: -0.1, zoom: 0.3, t: 1234.5 };
+    // From a phone that counts the fingers on its pad, and from one that predates the count.
+    for (const down of [0, 1, 2, 10]) expect(parseMessage({ ...frame, aim: { ...aim, down } })).toEqual({ ...frame, aim: { ...aim, down } });
+    expect(parseMessage({ ...frame, aim })).toEqual({ ...frame, aim });
+    for (const down of [-1, 11, 1.5, Infinity, "1", null, true, {}]) {
+      expect(parseMessage({ ...frame, aim: { ...aim, down } }), JSON.stringify(down)).toEqual({ ...frame, aim });
+    }
+  });
+
   it("rejects a status whose engine reading is malformed, and accepts one with values absent", () => {
     for (const engine of [{ phase: "" }, { phase: "running" }, { phase: "A".repeat(17) }, { phase: "OFF!" },
       { phase: 1 }, { phase: "OFF", n1: "72" }, { phase: "OFF", n2: NaN }, { phase: "OFF", thrustLbf: Infinity },
