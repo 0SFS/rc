@@ -84,6 +84,18 @@ export interface AircraftStatus {
    * capability this way avoids a protocol version bump for an additive field.
    */
   gearDown?: boolean;
+  /**
+   * Automatic flaps, which the flaps lever's AUTO turns on and moving the
+   * lever turns off. Absent from a host without flap automation, and the
+   * phone then offers no AUTO; additive on v1 like `gearDown`.
+   */
+  autoFlaps?: boolean;
+  /**
+   * The trim assists, the HUD's AUTO TRIM corner: on, an axis's trim wheel is
+   * the assist's and its slider is not the pilot's. Absent from a host without
+   * them, and the phone's corner then centres trim instead; additive on v1.
+   */
+  autoTrim?: { pitch: boolean; roll: boolean };
   /** The throttle's bottom 20% commands wheel brakes; absent on older hosts. */
   throttleBrakeRange?: boolean;
   /** Retain the combined lever's brake setting after release; false/absent springs back to idle. */
@@ -230,6 +242,18 @@ export interface PhoneControllerSettings {
   /** Touchdown pulses, where the phone's browser can vibrate. */
   haptics: boolean;
   /**
+   * The pitch/roll pad draws the flight's attitude indicator, from the
+   * computer's `AttitudeMessage`s; false keeps the plain pad. Additive on v1:
+   * settings without it are read as on, the default.
+   */
+  attitude: boolean;
+  /**
+   * What a press on a slider's track does: `jump` moves the handle to the
+   * finger, `grab` moves it only when the press is on the handle, and then by
+   * as much as the finger moves. Additive on v1 like `attitude`.
+   */
+  sliders: "jump" | "grab";
+  /**
    * What two fingers do on the camera pad: `both` turns the view with the
    * point between them as they move and zooms as they spread, at once;
    * `zoom` only zooms. Additive on v1: settings without it are read as
@@ -238,15 +262,127 @@ export interface PhoneControllerSettings {
   twoFingers: "both" | "zoom";
 }
 export const MAX_YAW_RETURN_MS = 1500;
-/** Settings from a peer that predates `twoFingers` lack it; it is read with its default. */
+/** Settings from a peer that predates `attitude`, `sliders` or `twoFingers` lack them; they are read with their defaults. */
 export function isPhoneControllerSettings(value: unknown): value is PhoneControllerSettings {
   if (!(record(value) && (value.grid === "bottom" || value.grid === "top")
     && (value.yawRelease === "center" || value.yawRelease === "hold")
     && finite(value.yawReturnMs) && value.yawReturnMs >= 0 && value.yawReturnMs <= MAX_YAW_RETURN_MS
     && typeof value.haptics === "boolean"
+    && (value.attitude === undefined || typeof value.attitude === "boolean")
+    && (value.sliders === undefined || value.sliders === "jump" || value.sliders === "grab")
     && (value.twoFingers === undefined || value.twoFingers === "both" || value.twoFingers === "zoom"))) return false;
+  value.attitude ??= true;
+  value.sliders ??= "jump";
   value.twoFingers ??= "both";
   return true;
+}
+
+/**
+ * What the phone's attitude indicator draws: the aircraft's attitude and
+ * velocity as the flight's own instrument reads them, the stick it shows while
+ * no finger holds the phone's (`aileron`, `elevator`, where the controls are),
+ * and `view`, the frame it is drawn from — the 3D camera's forward, right and
+ * down in local north/east/down, row-major — when Renderer → Instruments →
+ * Attitude indicator view is Camera; absent, it is drawn from the aircraft.
+ * `readings` are what the pad writes on its corners.
+ */
+export interface PhoneAttitude {
+  rollRad: number;
+  pitchRad: number;
+  headingRad: number;
+  northVelocityFps: number;
+  eastVelocityFps: number;
+  verticalSpeedFps: number;
+  aileron: number;
+  elevator: number;
+  view?: number[];
+  readings?: PhoneAttitudeReadings;
+}
+/**
+ * The readings the flight's Compact layout writes on its attitude indicator's
+ * corners, which the phone's pad writes on its own; heading and vertical speed
+ * come from the attitude itself. `altitudeFt` is above sea level, absent while
+ * sea level there is unknown; `aoaDeg` is absent from an aircraft that reports
+ * none. `tints` colour them as the flight's instrument bands do
+ * (fly/src/flight/hud/instrumentBands.ts): airspeed and angle of attack 0
+ * comfortable to 1 at the limit, vertical speed -1 descending to 1 climbing at
+ * the aircraft's full scale, in steps of 5%; absent where the flight shows none.
+ * Additive on v1: an older phone ignores them and keeps its chips.
+ */
+export interface PhoneAttitudeReadings {
+  iasKt: number;
+  altitudeFt?: number;
+  aoaDeg?: number;
+  tints?: { ias?: number; aoa?: number; vs?: number };
+}
+/**
+ * Computer → phone on the unreliable channel, latest value only, as the
+ * computer draws its frames and no faster than 60 a second, while the phone's
+ * Attitude indicator setting is on. Not authority: it cannot refresh a lease.
+ * Additive on v1: an older phone drops it, and a phone whose computer never
+ * sends one keeps the plain pad.
+ */
+export type AttitudeMessage = Envelope & { type: "attitude"; attitude: PhoneAttitude };
+/**
+ * The attitude for the phone from what this computer's indicator draws,
+ * rounded far below what the pad can show so that a frame stays short.
+ */
+export function phoneAttitude(
+  state: Omit<PhoneAttitude, "aileron" | "elevator" | "view" | "readings">,
+  stick: { aileron: number; elevator: number },
+  view: readonly number[] | null,
+  readings?: {
+    iasKt: number; altitudeFt: number | null; aoaDeg: number | null;
+    tints: { ias: number | null; aoa: number | null; vs: number | null };
+  } | null,
+): PhoneAttitude {
+  // Divided rather than multiplied by a step, which would print 0.12350000000000001.
+  const round = (value: number, per: number) => Math.round(value * per) / per;
+  const fine = (value: number) => round(value, 1e4);
+  // The pad writes whole knots and feet and tenths of a degree, as the flight does.
+  const known = (value: number | null, per: number) => (value === null || !Number.isFinite(value) ? undefined : round(value, per));
+  const tint = (value: number | null, min: number) => known(value === null ? null : Math.min(1, Math.max(min, value)), 20);
+  const tints = readings && { ias: tint(readings.tints.ias, 0), aoa: tint(readings.tints.aoa, 0), vs: tint(readings.tints.vs, -1) };
+  return {
+    rollRad: fine(state.rollRad), pitchRad: fine(state.pitchRad), headingRad: fine(state.headingRad),
+    northVelocityFps: round(state.northVelocityFps, 100), eastVelocityFps: round(state.eastVelocityFps, 100),
+    verticalSpeedFps: round(state.verticalSpeedFps, 100),
+    aileron: round(stick.aileron, 1e3), elevator: round(stick.elevator, 1e3),
+    ...(view ? { view: view.map(fine) } : {}),
+    ...(readings ? {
+      readings: dropUndefined({
+        iasKt: Math.round(readings.iasKt),
+        altitudeFt: known(readings.altitudeFt, 1),
+        aoaDeg: known(readings.aoaDeg, 10),
+        tints: tints && Object.values(tints).some(value => value !== undefined) ? dropUndefined(tints) : undefined,
+      }),
+    } : {}),
+  };
+}
+/** Leaves out what is unknown rather than sending it as null. */
+function dropUndefined<T extends object>(value: T): T {
+  return Object.fromEntries(Object.entries(value).filter(([, item]) => item !== undefined)) as T;
+}
+/** Far past any aircraft's speed, in ft/s, and still a short number on the wire. */
+const MAX_ATTITUDE_SPEED_FPS = 1e5;
+export function isPhoneAttitude(value: unknown): value is PhoneAttitude {
+  if (!record(value)) return false;
+  const angle = (key: string) => finite(value[key]) && Math.abs(value[key] as number) <= 4 * Math.PI;
+  const speed = (key: string) => finite(value[key]) && Math.abs(value[key] as number) <= MAX_ATTITUDE_SPEED_FPS;
+  const unit = (item: unknown) => finite(item) && Math.abs(item) <= 1.001;
+  return ["rollRad", "pitchRad", "headingRad"].every(angle)
+    && ["northVelocityFps", "eastVelocityFps", "verticalSpeedFps"].every(speed)
+    && unit(value.aileron) && unit(value.elevator)
+    && (value.view === undefined || (Array.isArray(value.view) && value.view.length === 9 && value.view.every(unit)))
+    && (value.readings === undefined || isPhoneAttitudeReadings(value.readings));
+}
+function isPhoneAttitudeReadings(value: unknown): value is PhoneAttitudeReadings {
+  if (!record(value)) return false;
+  const within = (item: unknown, bound: number) => finite(item) && Math.abs(item) <= bound;
+  const optional = (item: unknown, bound: number) => item === undefined || within(item, bound);
+  const tints = value.tints;
+  return within(value.iasKt, MAX_ATTITUDE_SPEED_FPS) && optional(value.altitudeFt, 1e7) && optional(value.aoaDeg, 180)
+    && (tints === undefined || (record(tints) && optional(tints.ias, 1) && optional(tints.aoa, 1) && optional(tints.vs, 1)));
 }
 /**
  * The phone controller's settings, both ways on the reliable channel. The
@@ -264,9 +400,15 @@ export function isPhoneControllerSettings(value: unknown): value is PhoneControl
 export type PhoneSettingsMessage = Envelope & { type: "settings"; settings: PhoneControllerSettings; rev: number; initial?: true };
 
 export interface Envelope { v: 1; session: string; epoch: number }
-export type ActionName = "requestControl" | "releaseControl" | "setPriority" | "setPaused" | "setViewMode" | "setGearDown" | "shutdownEngine";
+export type ActionName = "requestControl" | "releaseControl" | "setPriority" | "setPaused" | "setViewMode" | "setGearDown" | "setAutoFlaps" | "setPitchAutoTrim" | "setRollAutoTrim" | "shutdownEngine";
+/**
+ * `input: 1` when the pilot tapped for it, as on a control frame; one the
+ * phone sends by itself, asking back control it lost or letting go as it
+ * closes, has none. Additive on v1; an older host ignores it.
+ */
 export type ActionMessage = Envelope & {
   type: "action"; id: number; lease: number; action: ActionName; value?: boolean | "first" | "third" | "phone" | "computer";
+  input?: 1;
 };
 /** Latest-value presentation cue; pulseMs 0 means stop now. Never a history of impacts. */
 export interface HapticFeedbackFrame { v: 1; id: number; pulseMs: number; ttlMs: number }
@@ -275,10 +417,14 @@ export interface HapticFeedbackFrame { v: 1; id: number; pulseMs: number; ttlMs:
  * absent otherwise. A held control like the brake, not an action: it ends
  * when the frames that carry it stop, so a phone that drops off cannot leave
  * the starter turning. Additive on v1; an older host ignores it.
+ *
+ * `input: 1` when the pilot touched something on the phone since the previous
+ * frame went out: a frame that only follows the computer's levers, or keeps
+ * the stream alive, has none. Additive on v1; an older host ignores it.
  */
 export type ControlFrame = Envelope & {
   type: "controls"; seq: number; lease: number; controls: ControlSurfaceState; camera?: CameraAim; aim?: CameraTotal; trace?: ControlTrace;
-  starter?: 1;
+  starter?: 1; input?: 1;
 };
 export type RemoteMessage =
   | { v: 1; type: "hello"; secret: string }
@@ -301,6 +447,7 @@ export type RemoteMessage =
   | ControlFrame
   | (Envelope & { type: "heartbeat"; lease: number; status?: AircraftStatus; appliedSeq?: number; receiveToApplyMs?: number; feedback?: HapticFeedbackFrame; trace?: 1; controlSend?: ControlSendMode })
   | (Envelope & { type: "ping" | "pong"; id: number; sentAt: number })
+  | AttitudeMessage
   | PhoneSettingsMessage;
 
 export const NEUTRAL_CONTROLS: ControlSurfaceState = {
@@ -380,6 +527,9 @@ function status(value: unknown): value is AircraftStatus {
     && typeof value.paused === "boolean" && (value.viewMode === "first" || value.viewMode === "third")
     && isControls(value.controls) && finite(value.airspeedKts) && finite(value.altitudeFt) && finite(value.headingDeg)
     && (value.gearDown === undefined || typeof value.gearDown === "boolean")
+    && (value.autoFlaps === undefined || typeof value.autoFlaps === "boolean")
+    && (value.autoTrim === undefined || (record(value.autoTrim)
+      && typeof value.autoTrim.pitch === "boolean" && typeof value.autoTrim.roll === "boolean"))
     && (value.throttleBrakeRange === undefined || typeof value.throttleBrakeRange === "boolean")
     && (value.keepSliderBrakes === undefined || typeof value.keepSliderBrakes === "boolean")
     && (value.afterburnerDetent === undefined || (finite(value.afterburnerDetent) && value.afterburnerDetent >= 0 && value.afterburnerDetent <= 1))
@@ -441,6 +591,7 @@ export function parseMessage(input: unknown): RemoteMessage | null {
         && (value.aim.down as number) >= 0 && (value.aim.down as number) <= MAX_CAMERA_FINGERS)) delete value.aim.down;
       if (valid && value.trace !== undefined && !isControlTrace(value.trace)) delete value.trace;
       if (valid && value.starter !== undefined && value.starter !== 1) delete value.starter;
+      if (valid && value.input !== undefined && value.input !== 1) delete value.input;
       break;
     case "heartbeat": valid = isCounter(value.lease) && (value.status === undefined || status(value.status))
       && (value.appliedSeq === undefined || isCounter(value.appliedSeq))
@@ -451,15 +602,19 @@ export function parseMessage(input: unknown): RemoteMessage | null {
       if (valid && value.controlSend !== undefined && value.controlSend !== "timer" && value.controlSend !== "batch") delete value.controlSend;
       break;
     case "ping": case "pong": valid = isCounter(value.id) && finite(value.sentAt) && value.sentAt >= 0; break;
+    case "attitude": valid = isPhoneAttitude(value.attitude); break;
     case "settings": valid = isPhoneControllerSettings(value.settings) && isCounter(value.rev);
       if (valid && value.initial !== undefined && value.initial !== true) delete value.initial;
       break;
     case "action": valid = isCounter(value.id) && isCounter(value.lease) && (
       ((value.action === "requestControl" || value.action === "releaseControl" || value.action === "shutdownEngine") && value.value === undefined)
-      || ((value.action === "setPaused" || value.action === "setGearDown") && typeof value.value === "boolean")
+      || ((value.action === "setPaused" || value.action === "setGearDown" || value.action === "setAutoFlaps"
+        || value.action === "setPitchAutoTrim" || value.action === "setRollAutoTrim") && typeof value.value === "boolean")
       || (value.action === "setViewMode" && (value.value === "first" || value.value === "third"))
       || (value.action === "setPriority" && (value.value === "phone" || value.value === "computer"))
-    ); break;
+    );
+      if (valid && value.input !== undefined && value.input !== 1) delete value.input;
+      break;
   }
   return valid ? value as RemoteMessage : null;
 }

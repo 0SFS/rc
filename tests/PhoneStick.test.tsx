@@ -3,6 +3,8 @@ import { act } from 'react'
 import { createRoot, type Root } from 'react-dom/client'
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
 import { PhoneBrake, PhoneCameraPad, PhoneStick } from '../src/PhoneStick'
+import { inverseStickResponse, stickResponse, type PhoneAttitudeInstrument } from '../src/phoneAttitudeInstrument'
+import type { PhoneAttitude } from '../src/protocol'
 
 let root: Root
 let container: HTMLDivElement
@@ -18,7 +20,7 @@ beforeEach(() => {
     releasePointerCapture: { configurable: true, value: vi.fn() },
   })
 })
-afterEach(() => { act(() => root.unmount()); container.remove(); vi.restoreAllMocks() })
+afterEach(() => { act(() => root.unmount()); container.remove(); vi.restoreAllMocks(); vi.unstubAllGlobals() })
 /** Pointer-driven changes carry when their touch happened, for the opt-in camera trace. */
 const timed = expect.objectContaining({ at: expect.any(Number) })
 function pointer(element: Element, type: string, id: number, x = 100, y = 100) {
@@ -173,5 +175,65 @@ describe('phone touch controls', () => {
     pointer(pad, 'pointerdown', 1)
     act(() => root.render(<PhoneCameraPad disabled onGesture={vi.fn()} onFingers={fingers} />))
     expect(counts()).toEqual([1, 2, 1, 0, 1, 0, 1, 0])
+  })
+})
+
+describe('attitude indicator in the pitch/roll pad', () => {
+  it('stays plain until the computer sends an attitude, then draws it once a frame and steers as the flight pad does', () => {
+    const frames: FrameRequestCallback[] = []
+    vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => frames.push(callback))
+    vi.stubGlobal('cancelAnimationFrame', vi.fn())
+    const paint = () => act(() => { for (const callback of frames.splice(0)) callback(0) })
+    let attitude: PhoneAttitude | null = null
+    const listeners = new Set<() => void>()
+    const source = {
+      getAttitude: () => attitude,
+      subscribeAttitude: (listener: () => void) => { listeners.add(listener); return () => { listeners.delete(listener) } },
+    }
+    const send = (next: PhoneAttitude) => act(() => { attitude = next; for (const listener of listeners) listener() })
+    const draw = vi.fn()
+    const destroy = vi.fn()
+    const mount = vi.fn<(host: HTMLElement) => PhoneAttitudeInstrument>(() => ({ draw, destroy }))
+    const instrument = { renderer: { halfShare: .5, mount }, source }
+    const stick = vi.fn()
+    act(() => root.render(<PhoneStick label="Pitch/roll" disabled={false} onChange={stick} instrument={instrument} />))
+    const pad = container.querySelector('button')!
+    // A computer that sends no attitude leaves the pad as it was.
+    expect(pad.classList).not.toContain('phone-stick--attitude')
+    expect(mount).not.toHaveBeenCalled()
+
+    const level = { rollRad: 0, pitchRad: .05, headingRad: 1, northVelocityFps: 100, eastVelocityFps: 0, verticalSpeedFps: 0, aileron: 0, elevator: 0 }
+    send(level)
+    expect(pad.classList).toContain('phone-stick--attitude')
+    expect(mount).toHaveBeenCalledWith(container.querySelector('.phone-stick__instrument'))
+    paint()
+    expect(draw).toHaveBeenLastCalledWith(level, { x: 0, y: 0, active: false })
+
+    // However many arrive in a frame, it draws the last one, once.
+    draw.mockClear()
+    send({ ...level, rollRad: .1 })
+    send({ ...level, rollRad: .2 })
+    paint()
+    expect(draw).toHaveBeenCalledTimes(1)
+    expect(draw).toHaveBeenLastCalledWith({ ...level, rollRad: .2 }, { x: 0, y: 0, active: false })
+
+    // Full deflection at the instrument's edge, 100px on a 200px pad, and
+    // each axis on its own: a corner is full roll and full pitch, not 71% of each.
+    pointer(pad, 'pointerdown', 1, 200, 0)
+    expect(stick).toHaveBeenLastCalledWith(1, -1, timed)
+    paint()
+    expect(draw).toHaveBeenLastCalledWith(expect.anything(), { x: 1, y: -1, active: true })
+    pointer(pad, 'pointermove', 1, 150, 100)
+    expect(stick).toHaveBeenLastCalledWith(stickResponse(.5), 0, timed)
+    pointer(pad, 'pointerup', 1)
+
+    // Let go, it shows where the aircraft's controls are, as the flight's pad does.
+    send({ ...level, aileron: .25, elevator: -.5 })
+    paint()
+    expect(draw).toHaveBeenLastCalledWith(expect.anything(), { x: inverseStickResponse(.25), y: inverseStickResponse(.5), active: true })
+
+    act(() => root.render(null))
+    expect(destroy).toHaveBeenCalledTimes(1)
+    expect(listeners.size).toBe(0)
   })
 })

@@ -69,6 +69,18 @@ export const REMOTE_CONTROL_PARAMETERS = [
     appliesLive: true,
     source: "rc/src/controlBlend.ts",
   },
+  {
+    id: "osfs.remote.hostFlightUi",
+    label: "Flight UI on this computer while a phone is connected",
+    description: "Off, a connected phone has the flight's instruments and controls, and this computer shows only the view, the toolbar and its windows. They come back here while the phone stops answering, and when a key is pressed here, until the phone is touched again. On, both screens show them.",
+    unit: "none",
+    kind: "boolean",
+    default: false,
+    defaultReason: "The phone is the flight's instruments and controls while it is connected, so the view here is left clear.",
+    home: main(REMOTE_CONTROL),
+    appliesLive: true,
+    source: "src/flight/createFlightSimApp.ts",
+  },
 
   // Remote Control → Phone camera trackpad: how a phone's swipe reaches the
   // view. Smooth by default; docs/phone-controller.md → Camera trackpad.
@@ -224,6 +236,34 @@ export const REMOTE_CONTROL_PARAMETERS = [
     home: main(PHONE_CONTROLLER),
     appliesLive: true,
     source: "rc/src/phoneControllerClient.ts",
+  },
+  {
+    id: "osfs.phone.attitude",
+    label: "Attitude indicator on the phone",
+    description: "The phone's pitch/roll pad draws the flight's attitude indicator, as this computer's does. Off, it is a plain black pad with a crosshair.",
+    unit: "none",
+    kind: "boolean",
+    default: true,
+    defaultReason: "The pad is where this computer shows the attitude, and a phone flying the aircraft should show it too.",
+    home: main(PHONE_CONTROLLER),
+    appliesLive: true,
+    source: "rc/src/PhoneStick.tsx",
+  },
+  {
+    id: "osfs.phone.sliders",
+    label: "Phone sliders",
+    description: "What a press on one of the phone's sliders does: the handle jumps to the finger, or moves only when the press is on the handle.",
+    unit: "none",
+    kind: "choice",
+    choices: [
+      { id: "jump", label: "Jump to the finger", description: "A press anywhere on the track puts the handle there, and it follows the finger." },
+      { id: "grab", label: "Grab the handle", description: "A press off the handle does nothing; on it, the handle moves as far as the finger does." },
+    ],
+    default: "jump",
+    defaultReason: "A thumb lands where it means the lever to be, and a small handle is hard to hit on a moving phone.",
+    home: main(PHONE_CONTROLLER),
+    appliesLive: true,
+    source: "rc/src/sliderPointer.ts",
   },
   {
     id: "osfs.phone.twoFingers",

@@ -9,7 +9,7 @@ import {
   HANDOFF_MS, HAPTIC_FEEDBACK_TTL_MS, HAPTIC_FEEDBACK_VERSION, HEARTBEAT_MS, MAX_HAPTIC_PULSE_MS, PHONE_CONNECTION_LOSS_MS, STALE_MS,
   PROTOCOL_MISMATCH_MESSAGE, isCentered, isProtocolVersionMismatch, neutralize, parseMessage,
   type ActionMessage, type AircraftStatus, type CameraAim, type ControlFrame, type ControlSurfaceState,
-  type HandBack, type HapticFeedbackFrame, type PhoneControllerSettings, type PhoneSettingsMessage, type RemoteMessage,
+  type HandBack, type HapticFeedbackFrame, type PhoneAttitude, type PhoneControllerSettings, type PhoneSettingsMessage, type RemoteMessage,
 } from "./protocol";
 
 export interface PhoneSessionSnapshot {
@@ -20,6 +20,12 @@ export interface PhoneSessionSnapshot {
   priority?: "phone" | "computer";
   /** A connection loss invalidated the phone's input; it can rejoin through a fresh handoff. */
   returning: boolean;
+  /**
+   * Paired, and nothing heard from the phone for `PHONE_QUIET_MS`: its page
+   * hidden, its screen locked, its link gone. What it says is what this
+   * computer shows; who flies is the hold's, as ever.
+   */
+  quiet: boolean;
   invitationUrl: string | null;
   expiresAt: number | null;
   signalingAvailable: boolean;
@@ -45,6 +51,16 @@ export interface PhoneControlSessionOptions {
   setViewMode(mode: "first" | "third"): void;
   /** Absent hosts simply never advertise `gearDown`, so no phone offers the control. */
   setGearDown?(down: boolean): void;
+  /** The flaps lever's AUTO. Hosts without it never advertise `autoFlaps`. */
+  setAutoFlaps?(enabled: boolean): void;
+  /** The trim assists, the HUD's AUTO TRIM. Hosts without them never advertise `autoTrim`. */
+  setAutoTrim?(axis: "pitch" | "roll", enabled: boolean): void;
+  /**
+   * The pilot touched the phone: a control frame or an action marked
+   * `input`. Never for the frames that keep the stream alive or follow this
+   * computer's levers, or an action the phone sent by itself.
+   */
+  onPhoneInput?(): void;
   /** The phone's throttle ring filled at idle. Hosts without it never advertise an engine `state`. */
   shutdownEngine?(): void;
   /**
@@ -83,6 +99,14 @@ interface PendingHandoff {
 }
 /** A longer gap between this session's own wake-ups, which come every heartbeat, is this computer too busy to listen. */
 const BUSY_GAP_MS = 2 * HEARTBEAT_MS;
+/**
+ * A paired phone pings every second however little it is doing, and sends 60
+ * control frames a second while it flies, so one unheard for this long has
+ * stopped answering.
+ */
+export const PHONE_QUIET_MS = 2500;
+/** The fastest the phone's attitude indicator is sent: 60 a second, with a millisecond's grace for a 60 Hz display's jitter. */
+const ATTITUDE_INTERVAL_MS = 1000 / 60 - 1;
 const seconds = (ms: number) => `${(ms / 1000).toFixed(1)} s`;
 
 /** The desktop, not PeerJS Cloud, authenticates the invitation and owns flight authority. */
@@ -96,7 +120,7 @@ export function createPhoneControlSession(options: PhoneControlSessionOptions) {
   const transports = new Set<SessionTransport>();
   const cleanup = new Map<SessionTransport, () => void>();
   let snapshot: PhoneSessionSnapshot = {
-    phase: "off", message: "No phone paired.", owner: "local", returning: false,
+    phase: "off", message: "No phone paired.", owner: "local", returning: false, quiet: false,
     invitationUrl: null, expiresAt: null, signalingAvailable: true,
   };
   let endpoint: PeerEndpoint | null = null;
@@ -113,6 +137,8 @@ export function createPhoneControlSession(options: PhoneControlSessionOptions) {
   let latest: { frame: ControlFrame; receivedAt: number; heardAt: number } | null = null;
   /** When a flying phone went quiet, on the listening clock, while its last command is held. */
   let quietSince: number | null = null;
+  /** The last message of any kind from the paired phone, on the listening clock. */
+  let phoneHeardAt = 0;
   let lastSeq = -1;
   let localReady = false;
   let remoteReady = false;
@@ -130,6 +156,9 @@ export function createPhoneControlSession(options: PhoneControlSessionOptions) {
   /** The newest settings message this session's phone sent, or null if it never sent one; and the last answer sent. */
   let phoneSettingsRev: number | null = null;
   let phoneSettingsSent = "";
+  /** The newest attitude for the phone, until it leaves; and when the last one did. */
+  let attitude: PhoneAttitude | null = null;
+  let attitudeSentAt = -Infinity;
   /**
    * The phone joined and has not released: after a connection loss it can
    * rejoin through a fresh handoff. Choosing priority never clears this claim.
@@ -278,6 +307,8 @@ export function createPhoneControlSession(options: PhoneControlSessionOptions) {
     letGo();
     clearTimeout(setupTimer); setupTimer = undefined;
     active = null;
+    attitude = null;
+    attitudeSentAt = -Infinity;
     for (const detach of cleanup.values()) detach();
     cleanup.clear();
     for (const transport of transports) transport.close();
@@ -339,6 +370,7 @@ export function createPhoneControlSession(options: PhoneControlSessionOptions) {
     if (actions.has(message.id)) { send(actions.get(message.id)!); return; }
     if (pending?.id === message.id || message.id <= maxActionId) return;
     maxActionId = message.id;
+    if (message.input === 1) options.onPhoneInput?.();
     // Release is the phone letting go on purpose, so nothing hands control
     // back. It only ever removes authority, so it counts even when stale.
     if (message.action === "releaseControl") letGo();
@@ -382,6 +414,12 @@ export function createPhoneControlSession(options: PhoneControlSessionOptions) {
     } else if (message.action === "setGearDown") {
       if (!options.setGearDown) { acknowledge(message.id, false, "This simulator cannot move the gear."); return; }
       options.setGearDown(message.value as boolean);
+    } else if (message.action === "setAutoFlaps") {
+      if (!options.setAutoFlaps) { acknowledge(message.id, false, "This simulator has no automatic flaps."); return; }
+      options.setAutoFlaps(message.value as boolean);
+    } else if (message.action === "setPitchAutoTrim" || message.action === "setRollAutoTrim") {
+      if (!options.setAutoTrim) { acknowledge(message.id, false, "This simulator has no trim assist."); return; }
+      options.setAutoTrim(message.action === "setPitchAutoTrim" ? "pitch" : "roll", message.value as boolean);
     } else if (message.action === "shutdownEngine") {
       if (!options.shutdownEngine) { acknowledge(message.id, false, "This simulator cannot shut its engine down."); return; }
       options.shutdownEngine();
@@ -392,7 +430,9 @@ export function createPhoneControlSession(options: PhoneControlSessionOptions) {
   const onNative = (input: unknown, rejectVersion: () => void) => {
     const message = parseMessage(input);
     if (!message && isProtocolVersionMismatch(input)) { rejectVersion(); return; }
-    if (!message || !("session" in message) || message.session !== session || message.epoch !== epoch || !localReady || !remoteReady) return;
+    if (!message || !("session" in message) || message.session !== session) return;
+    phoneHeardAt = listening();
+    if (message.epoch !== epoch || !localReady || !remoteReady) return;
     if (message.type === "ping") { active?.sendNative({ ...message, type: "pong" }, true); return; }
     if (message.type !== "controls") return;
     const receivedAt = now();
@@ -411,6 +451,7 @@ export function createPhoneControlSession(options: PhoneControlSessionOptions) {
     lastSeq = message.seq;
     latest = { frame: message, receivedAt, heardAt: listening() };
     if (snapshot.owner === "phone" && aim.receive(message, receivedAt)) options.onCameraAim?.();
+    if (message.input === 1) options.onPhoneInput?.();
     if (pending) { pending.frame = message; maybeGrant(); }
   };
 
@@ -487,7 +528,7 @@ export function createPhoneControlSession(options: PhoneControlSessionOptions) {
             localReady = true;
             if (!send({ ...envelope(), type: "ready" })) { fail("Could not finish phone connection setup. Create a new QR."); return; }
             if (remoteReady) {
-              clearTimeout(setupTimer); setupTimer = undefined;
+              clearTimeout(setupTimer); setupTimer = undefined; phoneHeardAt = listening();
               publish({ phase: "paired", message: "Phone paired · Desktop controls" });
             }
           }).catch(() => {
@@ -497,6 +538,7 @@ export function createPhoneControlSession(options: PhoneControlSessionOptions) {
           return;
         }
         if (!("session" in message) || message.session !== session) return;
+        phoneHeardAt = listening();
         // Not authority, so not bound to an epoch: a change made on the phone
         // just as control changed hands still counts.
         if (message.type === "settings") { if (localReady && remoteReady) receivePhoneSettings(message); return; }
@@ -504,7 +546,7 @@ export function createPhoneControlSession(options: PhoneControlSessionOptions) {
         if (message.type === "ready") {
           remoteReady = true;
           if (localReady) {
-            clearTimeout(setupTimer); setupTimer = undefined;
+            clearTimeout(setupTimer); setupTimer = undefined; phoneHeardAt = listening();
             publish({ phase: "paired", message: "Phone paired · Desktop controls" });
           }
         } else if (localReady && remoteReady && message.type === "action") handleAction(message);
@@ -559,6 +601,22 @@ export function createPhoneControlSession(options: PhoneControlSessionOptions) {
     }
   };
 
+  /** Only what this computer shows hangs on it: who flies is `watchSilence`'s. */
+  const watchQuiet = () => {
+    const quiet = snapshot.phase === "paired" && listening() - phoneHeardAt > PHONE_QUIET_MS;
+    if (quiet === snapshot.quiet) return;
+    if (snapshot.phase === "paired") {
+      log.record("channel", "phone-quiet", quiet ? `Nothing from the phone for ${seconds(PHONE_QUIET_MS)}` : "The phone answers again", quiet ? "warn" : "info");
+    }
+    publish({ quiet });
+  };
+
+  const sendAttitude = () => {
+    if (!attitude || !active || !localReady || !remoteReady) return;
+    if (active.sendNative({ ...envelope(), type: "attitude", attitude })) attitude = null;
+    attitudeSentAt = now();
+  };
+
   const timer = setInterval(() => {
     if (disposed) return;
     // Every heartbeat wakes the listening clock, so a late one is this computer's stall.
@@ -573,10 +631,13 @@ export function createPhoneControlSession(options: PhoneControlSessionOptions) {
       publishStatus("Desktop hidden · Simulation paused · Phone remains connected");
     }
     watchSilence();
+    watchQuiet();
     if (currentPriority() !== snapshot.priority) publishStatus(snapshot.owner === "phone" ? flyingMessage() : "Computer controls");
     else if (returning() !== snapshot.returning) publish();
     retryStatus();
     if (!active || !localReady || !remoteReady) return;
+    // The last frame drawn before a pause, or before the phone was ready, still reaches it.
+    if (attitude) sendAttitude();
     const lease = issueLease();
     ticks += 1;
     active.sendNative({ ...envelope(), type: "heartbeat", lease,
@@ -679,6 +740,19 @@ export function createPhoneControlSession(options: PhoneControlSessionOptions) {
     },
     /** The phone controller's settings changed here: tell a phone that keeps them here. */
     syncPhoneSettings,
+    /** A phone is paired and its link is open. */
+    isConnected: () => snapshot.phase === "paired",
+    /**
+     * What the phone's attitude indicator draws, from the frame this computer
+     * just drew; the host sends one while the phone's Attitude indicator
+     * setting is on. Latest value only, at most 60 a second; one held back by
+     * that, or sent before the phone is ready, goes with the next heartbeat.
+     */
+    setAttitude(next: PhoneAttitude) {
+      if (disposed || snapshot.phase !== "paired") return;
+      attitude = next;
+      if (now() - attitudeSentAt >= ATTITUDE_INTERVAL_MS) sendAttitude();
+    },
     /**
      * Presentation only. Replaces any unsent pulse; 0 asks the phone to stop.
      * Ignored unless the phone currently owns control of this epoch.

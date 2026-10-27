@@ -1,5 +1,5 @@
 import { afterEach, beforeEach, describe, expect, it, vi } from 'vitest'
-import { createPhoneControlSession } from '../src/createPhoneControlSession'
+import { PHONE_QUIET_MS, createPhoneControlSession } from '../src/createPhoneControlSession'
 import { DEFAULT_PHONE_CAMERA_TUNING } from '../src/phoneCameraTuning'
 import { DEFAULT_PHONE_CONTROLLER_SETTINGS } from '../src/phoneControllerSettings'
 import { DEFAULT_CONTROL_SHARING, type ControlSharing } from '../src/controlSharing'
@@ -152,6 +152,35 @@ describe('desktop phone control session', () => {
     expect(transport.last('heartbeat')).toMatchObject({ controlSend: 'batch' })
   })
 
+  it("sends the phone's attitude indicator only once paired, at most 60 a second, and the last one held back with the heartbeat", async () => {
+    const h = setup()
+    const attitude = {
+      rollRad: .1, pitchRad: 0, headingRad: 1, northVelocityFps: 100, eastVelocityFps: 0, verticalSpeedFps: 0, aileron: 0, elevator: 0,
+    }
+    const sent = (transport: { native: RemoteMessage[] }) => transport.native.filter(message => message.type === 'attitude')
+    // Nobody to send it to.
+    h.session.setAttitude(attitude)
+    expect(h.session.isConnected()).toBe(false)
+    const transport = await h.pair()
+    expect(h.session.isConnected()).toBe(true)
+    expect(sent(transport)).toEqual([])
+
+    h.session.setAttitude(attitude)
+    expect(transport.last('attitude')).toMatchObject({ attitude, epoch: transport.last('welcome').epoch })
+    // A frame sooner than 60 a second waits, and only the newest of those goes.
+    h.session.setAttitude({ ...attitude, rollRad: .2 })
+    h.session.setAttitude({ ...attitude, rollRad: .3 })
+    expect(sent(transport)).toHaveLength(1)
+    await h.advance(50)
+    expect(sent(transport).map(message => message.type === 'attitude' && message.attitude.rollRad)).toEqual([.1, .3])
+    // Nothing new: nothing more, as the flight sits paused.
+    await h.advance(100)
+    expect(sent(transport)).toHaveLength(2)
+
+    h.session.disconnect()
+    expect(h.session.isConnected()).toBe(false)
+  })
+
   it("keeps the phone's own settings here, answers each change, and tells only a phone that sent its own", async () => {
     let held: PhoneControllerSettings = { ...DEFAULT_PHONE_CONTROLLER_SETTINGS, yawReturnMs: 300 }
     const set = vi.fn((settings: PhoneControllerSettings) => { held = { ...settings } })
@@ -167,8 +196,8 @@ describe('desktop phone control session', () => {
 
     // Its first: kept only where this computer still has the default.
     from({ grid: 'top', yawRelease: 'hold', yawReturnMs: 500, haptics: false }, 1, { initial: true })
-    // It sends no camera pad setting, as a phone that predates it would, so the default stands in for it.
-    const merged = { grid: 'top', yawRelease: 'hold', yawReturnMs: 300, haptics: false, twoFingers: 'both' }
+    // Its attitude indicator, sliders and camera pad settings predate nothing here, so the defaults stand in for them.
+    const merged = { grid: 'top', yawRelease: 'hold', yawReturnMs: 300, haptics: false, attitude: true, sliders: 'jump', twoFingers: 'both' }
     expect(set).toHaveBeenLastCalledWith(merged)
     expect(transport.last('settings')).toMatchObject({ settings: merged, rev: 1 })
 
@@ -579,6 +608,94 @@ describe('desktop phone control session', () => {
     transport.receive({ ...action, id: 3, value: false })
     expect(h.state.paused).toBe(true)
     expect(transport.last('ack').ok).toBe(false)
+  })
+
+  it('switches automatic flaps from the phone, and says so when this computer has none', async () => {
+    const setAutoFlaps = vi.fn()
+    const h = setup({ setAutoFlaps })
+    const transport = await h.pair()
+    const handoff = h.grant(transport)
+    const action = { v: 1, type: 'action', session: handoff.session, epoch: handoff.epoch, lease: handoff.lease, id: 2, action: 'setAutoFlaps', value: true }
+    transport.receive(action)
+    expect(setAutoFlaps).toHaveBeenCalledWith(true)
+    expect(transport.last('ack')).toMatchObject({ id: 2, ok: true })
+
+    const without = setup()
+    const other = await without.pair()
+    const granted = without.grant(other)
+    other.receive({ ...action, session: granted.session, epoch: granted.epoch, lease: granted.lease })
+    expect(other.last('ack')).toMatchObject({ id: 2, ok: false, message: 'This simulator has no automatic flaps.' })
+  })
+
+  it('switches each trim assist from the phone on its own, and says so when this computer has none', async () => {
+    const setAutoTrim = vi.fn()
+    const h = setup({ setAutoTrim })
+    const transport = await h.pair()
+    const handoff = h.grant(transport)
+    const action = { v: 1, type: 'action', session: handoff.session, epoch: handoff.epoch, lease: handoff.lease, id: 2, action: 'setRollAutoTrim', value: true }
+    transport.receive(action)
+    expect(setAutoTrim).toHaveBeenLastCalledWith('roll', true)
+    transport.receive({ ...action, id: 3, action: 'setPitchAutoTrim', value: true })
+    expect(setAutoTrim).toHaveBeenLastCalledWith('pitch', true)
+    expect(setAutoTrim).toHaveBeenCalledTimes(2)
+    expect(transport.last('ack')).toMatchObject({ id: 3, ok: true })
+
+    const without = setup()
+    const other = await without.pair()
+    const granted = without.grant(other)
+    other.receive({ ...action, session: granted.session, epoch: granted.epoch, lease: granted.lease })
+    expect(other.last('ack')).toMatchObject({ id: 2, ok: false, message: 'This simulator has no trim assist.' })
+  })
+
+  it('says when the pilot touches the phone, and not for what the phone sends by itself', async () => {
+    const onPhoneInput = vi.fn()
+    const h = setup({ onPhoneInput })
+    const transport = await h.pair()
+    // Unmarked, as when the phone asks back control it lost.
+    const handoff = h.grant(transport)
+    const frame = (seq: number, extra: object = {}) => ({
+      v: 1, type: 'controls', session: handoff.session, epoch: handoff.epoch, seq, lease: handoff.lease, controls: handoff.controls, ...extra,
+    })
+    transport.receiveNative(frame(1))
+    expect(onPhoneInput).not.toHaveBeenCalled()
+    transport.receiveNative(frame(2, { input: 1 }))
+    expect(onPhoneInput).toHaveBeenCalledTimes(1)
+    const action = (id: number, extra: object = {}) => ({
+      v: 1, type: 'action', session: handoff.session, epoch: handoff.epoch, lease: handoff.lease, id, action: 'setPaused', value: false, ...extra,
+    })
+    transport.receive(action(2))
+    expect(onPhoneInput).toHaveBeenCalledTimes(1)
+    transport.receive(action(3, { input: 1 }))
+    expect(onPhoneInput).toHaveBeenCalledTimes(2)
+    // A repeat of the same tap is not another one.
+    transport.receive(action(3, { input: 1 }))
+    expect(onPhoneInput).toHaveBeenCalledTimes(2)
+  })
+
+  it('says when a paired phone stops answering, and when it answers again', async () => {
+    const h = setup()
+    const transport = await h.pair()
+    const heartbeat = transport.last('heartbeat')
+    const ping = (id: number) => transport.receiveNative({ v: 1, type: 'ping', session: heartbeat.session, epoch: heartbeat.epoch, id, sentAt: id * 1000 })
+    // A phone that pings every second, as one does however little it is doing, is never quiet.
+    for (let id = 1; id <= 4; id++) { await h.advance(1000); ping(id) }
+    expect(h.session.getSnapshot().quiet).toBe(false)
+    const listener = vi.fn()
+    h.session.subscribe(listener)
+    await h.advance(PHONE_QUIET_MS - 100)
+    expect(h.session.getSnapshot().quiet).toBe(false)
+    await h.advance(200)
+    expect(h.session.getSnapshot().quiet).toBe(true)
+    expect(listener).toHaveBeenCalled()
+    ping(5)
+    await h.advance(50)
+    expect(h.session.getSnapshot().quiet).toBe(false)
+    // Unpaired, there is no phone to be quiet.
+    await h.advance(PHONE_QUIET_MS + 100)
+    expect(h.session.getSnapshot().quiet).toBe(true)
+    h.session.disconnect()
+    await h.advance(50)
+    expect(h.session.getSnapshot()).toMatchObject({ phase: 'off', quiet: false })
   })
 
   it.each(['disconnect', 'close', 'reset', 'release'] as const)('revokes phone control on %s and retains applied persistent settings', async (kind) => {

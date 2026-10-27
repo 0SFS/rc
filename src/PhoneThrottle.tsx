@@ -1,15 +1,17 @@
-import { useEffect, useRef } from 'react'
-import { createThrottleLever, type ThrottleLeverHandle } from '@0sfs/engines/throttleLever'
+import { useEffect, useMemo, useRef } from 'react'
+import { createThrottleLever, throttleLeverGauges, type ThrottleLeverHandle } from '@0sfs/engines/throttleLever'
 import type { EngineStatus } from './protocol'
+import type { SliderPress } from './sliderPointer'
 
 /**
  * The desktop HUD's throttle lever — the same DOM, drawn and driven by the
  * same code from `throttleLever.ts` — fed from this phone's own throttle and
  * the host's engine reading. Holding it to start, or at idle to shut down,
  * sends the intents the desktop's lever acts on, over the control channel.
- * A host that reports no engine `state` gets a plain throttle.
+ * A host that reports no engine `state` gets a plain throttle. The engine's
+ * spool or shaft speeds ride beside it as I-beams.
  */
-export function PhoneThrottle({ value, brake, actualThrottle, actualBrake, brakeRange, keepBrakes, afterburnerDetent, engine, disabled, onChange, onPowerChange, onStartHold, onShutdown }: {
+export function PhoneThrottle({ value, brake, actualThrottle, actualBrake, brakeRange, keepBrakes, afterburnerDetent, engine, disabled, press, onChange, onPowerChange, onStartHold, onShutdown }: {
   value: number
   brake: number
   actualThrottle?: number
@@ -20,6 +22,8 @@ export function PhoneThrottle({ value, brake, actualThrottle, actualBrake, brake
   afterburnerDetent?: number
   engine: EngineStatus | undefined
   disabled: boolean
+  /** Settings → Sliders. */
+  press: SliderPress
   onChange(value: number): void
   onPowerChange(command: { throttle: number; brake: number }): void
   onStartHold(held: boolean): void
@@ -43,6 +47,9 @@ export function PhoneThrottle({ value, brake, actualThrottle, actualBrake, brake
   const state = engine?.state
   const start = engine?.start ?? 0
   const blocked = engine?.blocked ?? null
+  const { kind, n1, n2, rpm, maxN1, maxN2, maxRpm } = engine ?? {}
+  const gauges = useMemo(() => throttleLeverGauges({ kind, n1Pct: n1, n2Pct: n2, rpm, maxN1Pct: maxN1, maxN2Pct: maxN2, maxRpm }),
+    [kind, n1, n2, rpm, maxN1, maxN2, maxRpm])
   useEffect(() => {
     lever.current?.update({
       throttle: value,
@@ -53,9 +60,11 @@ export function PhoneThrottle({ value, brake, actualThrottle, actualBrake, brake
       keepBrakes,
       afterburnerDetent: afterburnerDetent ?? null,
       engine: state === undefined ? null : { state, startProgress: start, blocked },
+      gauges,
+      press,
       disabled,
     })
-  }, [value, brake, actualThrottle, actualBrake, brakeRange, keepBrakes, afterburnerDetent, state, start, blocked, disabled])
+  }, [value, brake, actualThrottle, actualBrake, brakeRange, keepBrakes, afterburnerDetent, state, start, blocked, gauges, press, disabled])
   // Engine off, the lever rests at idle, and so does the throttle this phone sends.
   useEffect(() => {
     if (state === 'stopped' && value > 0 && !held.current) handlers.current.onChange(0)

@@ -5,7 +5,7 @@ import { parsePairingUrl } from '../src/pairing'
 import { DEFAULT_PHONE_CAMERA_TUNING } from '../src/phoneCameraTuning'
 import { DEFAULT_CONTROL_SHARING } from '../src/controlSharing'
 import { DEFAULT_PHONE_CONTROLLER_SETTINGS } from '../src/phoneControllerSettings'
-import { NEUTRAL_CONTROLS, type AircraftStatus, type ControlFrame, type PhoneControllerSettings, type RemoteMessage } from '../src/protocol'
+import { NEUTRAL_CONTROLS, type ActionMessage, type AircraftStatus, type ControlFrame, type PhoneControllerSettings, type RemoteMessage } from '../src/protocol'
 import type { createPeerEndpoint, SessionTransport } from '../src/peerTransport'
 
 type Envelope = { v: 1; session: string; epoch: number }
@@ -339,6 +339,59 @@ describe('phone controller', () => {
     await flush()
     expect(shutdownEngine).toHaveBeenCalledOnce()
     expect(h.hostLink.last('ack')).toMatchObject({ ok: true })
+  })
+
+  it('switches automatic flaps only on a host that says it has them', async () => {
+    const setAutoFlaps = vi.fn()
+    const h = await setup({}, { setAutoFlaps })
+    await advance(50)
+    await h.fly()
+    await advance(150)
+    expect(h.client.setAutoFlaps(true)).toBe(false)
+    h.state.autoFlaps = false
+    await advance(150)
+    expect(h.client.getSnapshot().status?.autoFlaps).toBe(false)
+    expect(h.client.setAutoFlaps(true)).toBe(true)
+    await flush()
+    expect(setAutoFlaps).toHaveBeenCalledWith(true)
+    expect(h.hostLink.last('ack')).toMatchObject({ ok: true })
+  })
+
+  it('switches each trim assist only on a host that says it has them', async () => {
+    const setAutoTrim = vi.fn()
+    const h = await setup({}, { setAutoTrim })
+    await advance(50)
+    await h.fly()
+    await advance(150)
+    expect(h.client.setAutoTrim('roll', true)).toBe(false)
+    h.state.autoTrim = { pitch: true, roll: false }
+    await advance(150)
+    expect(h.client.getSnapshot().status?.autoTrim).toEqual({ pitch: true, roll: false })
+    expect(h.client.setAutoTrim('roll', true)).toBe(true)
+    await flush()
+    expect(setAutoTrim).toHaveBeenCalledWith('roll', true)
+    expect(h.hostLink.last('ack')).toMatchObject({ ok: true })
+  })
+
+  it('marks the frame that carries a touch, and none of those that only keep the stream going', async () => {
+    const onPhoneInput = vi.fn()
+    const h = await setup({}, { onPhoneInput })
+    await advance(50)
+    await h.fly()
+    await advance(100)
+    onPhoneInput.mockClear()
+    const controlFrames = () => h.phoneLink.native.filter((message): message is ControlFrame => message.type === 'controls')
+    const before = controlFrames().length
+    await advance(50)
+    expect(controlFrames().slice(before).some(frame => frame.input)).toBe(false)
+    const touched = controlFrames().length
+    h.client.updateControls({ aileron: .3 })
+    await advance(50)
+    const after = controlFrames().slice(touched)
+    expect(after[0]).toMatchObject({ controls: { aileron: .3 }, input: 1 })
+    expect(after.slice(1).length).toBeGreaterThan(0)
+    expect(after.slice(1).some(frame => frame.input)).toBe(false)
+    expect(onPhoneInput).toHaveBeenCalledOnce()
   })
 
   it('is refused by a host that cannot shut its engine down', async () => {
@@ -740,6 +793,33 @@ describe('phone controller', () => {
     expect(h.client.getSnapshot()).toMatchObject({ canControl: true, status: { owner: 'phone', paused: false } })
   })
 
+  it('marks the actions the pilot tapped for, and not control it asks back by itself', async () => {
+    const onPhoneInput = vi.fn()
+    const h = await setup({}, { onPhoneInput })
+    await advance(50)
+    const actions = () => h.phoneLink.reliable.filter((message): message is ActionMessage => message.type === 'action')
+    await h.fly()
+    expect(actions().at(-1)).toMatchObject({ action: 'requestControl', input: 1 })
+    Object.defineProperty(h.doc, 'hidden', { value: true, writable: true })
+    h.doc.dispatchEvent(new Event('visibilitychange'))
+    await advance(5350)
+    expect(h.state.owner).toBe('local')
+    const before = actions().length
+    onPhoneInput.mockClear()
+    Object.defineProperty(h.doc, 'hidden', { value: false, writable: true })
+    h.doc.dispatchEvent(new Event('visibilitychange'))
+    await advance(50)
+    expect(h.state.owner).toBe('phone')
+    const asked = actions().slice(before)
+    expect(asked.map(message => message.action)).toContain('requestControl')
+    expect(asked.some(message => message.input)).toBe(false)
+    expect(onPhoneInput).not.toHaveBeenCalled()
+    h.client.setViewMode('first')
+    await flush()
+    expect(actions().at(-1)).toMatchObject({ action: 'setViewMode', input: 1 })
+    expect(onPhoneInput).toHaveBeenCalledOnce()
+  })
+
   it('keeps the phone participating after computer input without another request', async () => {
     const h = await setup()
     await advance(50)
@@ -1055,6 +1135,34 @@ describe('phone haptics', () => {
   })
 })
 
+describe('phone attitude indicator', () => {
+  it("holds the computer's newest attitude for the pad, outside the snapshot", async () => {
+    const h = await setup()
+    await flush()
+    expect(h.client.getAttitude()).toBeNull()
+    const renders = vi.fn()
+    const arrivals = vi.fn()
+    h.client.subscribe(renders)
+    const stop = h.client.subscribeAttitude(arrivals)
+    const attitude = {
+      rollRad: .3, pitchRad: .1, headingRad: 2, northVelocityFps: 90, eastVelocityFps: 10, verticalSpeedFps: -4,
+      aileron: .5, elevator: 0, view: [1, 0, 0, 0, 1, 0, 0, 0, 1],
+    }
+    h.host.setAttitude(attitude)
+    await flush()
+    expect(h.client.getAttitude()).toEqual(attitude)
+    expect(arrivals).toHaveBeenCalledTimes(1)
+    // A frame's worth of attitude never re-renders the flight controls.
+    expect(renders).not.toHaveBeenCalled()
+    stop()
+    await advance(20)
+    h.host.setAttitude({ ...attitude, rollRad: .4 })
+    await flush()
+    expect(h.client.getAttitude()?.rollRad).toBe(.4)
+    expect(arrivals).toHaveBeenCalledTimes(1)
+  })
+})
+
 describe('phone controller settings', () => {
   const storage = (entries: Record<string, string> = {}) => {
     const map = new Map(Object.entries(entries))
@@ -1104,6 +1212,30 @@ describe('phone controller settings', () => {
     expect(prefs.map.get('osfs.phone-yaw-release')).toBe('hold')
   })
 
+  it('keeps the attitude indicator on unless its pilot turned it off, here and on the computer', async () => {
+    const prefs = storage()
+    const held = computer()
+    const h = await setup({ storage: prefs }, { phoneSettings: held })
+    await flush()
+    expect(h.client.getSnapshot().settings.attitude).toBe(true)
+    h.client.updateSettings({ attitude: false })
+    await flush()
+    expect(held.held().attitude).toBe(false)
+    expect(prefs.map.get('osfs.phone-attitude')).toBe('off')
+  })
+
+  it('takes a slider to the finger unless its pilot chose to grab the handle, here and on the computer', async () => {
+    const prefs = storage()
+    const held = computer()
+    const h = await setup({ storage: prefs }, { phoneSettings: held })
+    await flush()
+    expect(h.client.getSnapshot().settings.sliders).toBe('jump')
+    h.client.updateSettings({ sliders: 'grab' })
+    await flush()
+    expect(held.held().sliders).toBe('grab')
+    expect(prefs.map.get('osfs.phone-sliders')).toBe('grab')
+  })
+
   it('turns the view with two fingers on the camera pad unless its pilot chose zoom only, here and on the computer', async () => {
     const prefs = storage()
     const held = computer()
@@ -1115,6 +1247,7 @@ describe('phone controller settings', () => {
     expect(held.held().twoFingers).toBe('zoom')
     expect(prefs.map.get('osfs.phone-two-fingers')).toBe('zoom')
   })
+
   it('brings a Zoom only kept on the phone to a computer that still has the default', async () => {
     const held = computer()
     const h = await setup({ storage: storage({ 'osfs.phone-two-fingers': 'zoom' }) }, { phoneSettings: held })

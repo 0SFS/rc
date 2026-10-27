@@ -28,15 +28,25 @@ pitch/roll, rudder, throttle, trim, flaps, brake, pause, and camera view.
 
 The controls sit where the desktop flight HUD puts them, so muscle memory carries between
 the two screens: the pitch/roll stick with roll trim above it, pitch trim on its left, the flaps lever
-on its right, and the trim-centring buttons in the corner above pitch trim; then yaw, brake and the
+on its right, and the AUTO TRIM corner above pitch trim; then yaw, brake and the
 throttle lever as the second group.
 
-On both screens, the round amber slider handle and its percentage show the command.
+On both screens, the hollow amber ring on each slider and its percentage show the command.
 A white I-beam marks the aircraft's actual position when it differs: flap travel,
 throttle position and yaw, plus the desktop's VTOL conversion lever. Hover or focus
 a slider to read both values. Unknown positions have no marker; the current models
 do not expose independent physical trim positions. Position feedback never moves
-the command handle or takes control.
+the command handle or takes control. The throttle lever's track has no fill. Coloured
+I-beams beside it show how fast the engine turns, on the lever's own 0–100% scale: blue N1 and
+green N2 for a turbine, each against its maximum, or blue RPM for a piston engine, against its rated RPM.
+The flaps lever has an **AUTO** button, lit while automatic flaps fly them, on a computer that
+offers automatic flaps.
+
+The corner above pitch trim is the HUD's **AUTO TRIM**: its upper half turns the roll trim assist
+on or off and its lower half the pitch one, each on its own and lit while on. While an assist is on
+it holds that trim, and its slider is disabled, as on the desktop. A computer without trim assists
+gets the older corner, whose halves centre roll and pitch trim. A button lights only while it is on:
+the hover highlight belongs to a mouse, and a phone would keep it on the last button tapped.
 
 The controller page never scrolls. It is sized to the viewport so a control cannot move out from
 under a thumb mid-flight, and everything secondary collapses to make room: the instruments, the link
@@ -66,6 +76,24 @@ The same choice is in Remote Control → **Shared controls** → **Control prior
 - Switching priority keeps the phone's held inputs and camera gestures active. It needs no new pairing,
   centring step or handoff. Pausing also keeps both devices connected. Hiding the computer's flight
   tab pauses the simulation and keeps the phone connected; resume explicitly when the tab returns.
+
+While a phone is connected, the computer hides its flight HUD — the instruments and controls, those
+in the toolbar too — so the flight is read and flown on the phone. The globe, the toolbar's readouts
+and any open windows stay, and the computer's keys and gamepad still fly. Remote Control → **Shared
+controls** → **Flight UI on this computer while a phone is connected** keeps the HUD shown.
+
+The HUD comes back by itself in two cases:
+- **The phone stops answering.** After 2.5 s without hearing from it, the HUD returns, and it hides
+  again once the phone is heard. A paired phone pings every second even when idle, so this means the
+  page is hidden, the screen is locked or the link is gone. As with the five-second hold (see
+  [When the link drops](#when-the-link-drops)), the computer's own stalls don't count, so a computer
+  rendering slowly takes longer than 2.5 s.
+- **A key is pressed on the computer**, because the pilot is now at the keyboard. The HUD stays
+  until the phone is touched again. Asking back control it lost, or un-pausing when it gets control back,
+  is something the phone does by itself, so neither counts as a touch.
+
+These keys don't count: a key typed into a text field, a key answering an open dialog, a modifier
+on its own, or a shortcut with ⌘ or Ctrl. Changing the setting starts afresh, and so does a phone that pairs again.
 
 Older saved choices for exclusive control or automatic takeover no longer change this model.
 **Disconnect** in the computer's Remote Control tab ends the session deliberately.
@@ -199,9 +227,27 @@ above the throttle. Where the browser can hide its own bars it asks once, in a p
 button in its grid after that. On an iPhone, where Safari has no page fullscreen at all, that popup
 explains why rather than only saying "add it to your Home Screen": what the bars cost, that nothing
 is missing or for sale, the three options that exist, and — folded away for whoever wants it — the
-whole technical case, including why another browser on the same phone changes nothing. ⚙ Settings moves the chip grid above or below the controls, chooses what two fingers do on the camera pad, and decides whether the
+whole technical case, including why another browser on the same phone changes nothing. ⚙ Settings moves the chip grid above or below the controls, chooses the pitch/roll pad and what two fingers do on the camera pad, and decides whether the
 yaw slider returns to centre when you let go — and how long that return takes — or keeps the
-deflection until you move it again.
+deflection until you move it again. **Sliders** decides what a press on a slider's track does:
+**Jump to finger**, the default, takes the handle to the press and then follows the finger;
+**Grab the handle** ignores a press off the handle, and a press on it moves the handle only as far
+as the finger moves. The throttle lever follows the same choice, but holding it to start a stopped
+engine works anywhere on it either way. The box around each slider takes the finger and keeps
+it until it lifts, so the browser cannot take a drag away. A yaw slider let go anywhere,
+on or off the screen, returns to centre.
+
+The pitch/roll pad is the desktop HUD's attitude indicator, drawn by the same renderer from the
+attitude the computer sends, up to 60 times a second, and seen from the same camera. The stick
+moves as on the desktop pad: full deflection at the instrument's edge, each axis on its own, and
+at rest it shows where the aircraft's controls are. Until the first attitude arrives, and with a
+computer that sends none, the pad is the plain black one with a crosshair. ⚙ Settings →
+**Pitch/roll pad** → **Plain** keeps it that way, and the computer stops sending the attitude.
+The flight's readings are written on the pad's corners, as the desktop's Compact layout writes
+them on its attitude indicator, and tinted the same way: airspeed top left, heading top centre,
+vertical speed top right, angle of attack bottom left and altitude above sea level bottom right.
+The grid then drops its IAS and ALT chips. A computer that sends no readings with the attitude
+keeps them in the grid.
 
 Those settings and **Haptics** are kept on the computer too, with its own, in Remote Control →
 **Phone controller**, so an export or a preset made on the computer carries them, and either screen

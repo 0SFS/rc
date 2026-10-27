@@ -1,6 +1,7 @@
-import { useCallback, useMemo, useState, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from "react";
 import type { InputTiming, PhoneControllerClient } from "./phoneControllerClient";
-import { PhoneBrake, PhoneCameraPad, PhoneStick } from "./PhoneStick";
+import type { LoadPhoneAttitude, PhoneAttitudeRenderer } from "./phoneAttitudeInstrument";
+import { PhoneBrake, PhoneCameraPad, PhoneStick, type PhoneStickInstrument } from "./PhoneStick";
 import { PhoneQrScanner } from "./PhoneQrScanner";
 import { PhoneEngine } from "./PhoneEngine";
 import { PhoneThrottle } from "./PhoneThrottle";
@@ -10,6 +11,7 @@ import { useFullscreenOffer } from "./useFullscreenOffer";
 import { PhoneSettings } from "./PhoneSettings";
 import { PhoneYaw } from "./PhoneYaw";
 import { PhoneControlRange } from "./PhoneControlRange";
+import type { SliderPress } from "./sliderPointer";
 import type { GridPosition, YawSettings } from "./phoneSettingsStore";
 import { ConnectionDiagnosticsPanel } from "./ConnectionDiagnosticsPanel";
 import { PhoneBrowserData } from "./PhoneBrowserData";
@@ -24,19 +26,31 @@ import "./phone.css";
  * lands on both screens at once.
  *
  * `onPair` takes a pairing link read by the page's own QR scanner, which a
- * session that has ended offers as the way back.
+ * session that has ended offers as the way back. `loadAttitude` brings the
+ * flight's attitude indicator to the pitch/roll pad; without it the pad stays
+ * plain.
  */
-export function PhoneController({ client, onPair }: { client: PhoneControllerClient; onPair?(url: string): void }) {
+export function PhoneController({ client, onPair, loadAttitude }: {
+  client: PhoneControllerClient; onPair?(url: string): void; loadAttitude?: LoadPhoneAttitude;
+}) {
   const state = useSyncExternalStore(client.subscribe, client.getSnapshot);
   const [scanning, setScanning] = useState(false);
   const status = state.status;
   const fullscreen = useFullscreenOffer();
   // The computer keeps these with its own settings; the client keeps this phone's copy.
-  const { grid: gridPosition, yawRelease, yawReturnMs, twoFingers } = state.settings;
+  const { grid: gridPosition, yawRelease, yawReturnMs, attitude, sliders, twoFingers } = state.settings;
+  const attitudeRenderer = useAttitudeRenderer(attitude ? loadAttitude : undefined);
+  const instrument = useMemo((): PhoneStickInstrument | undefined =>
+    attitude && attitudeRenderer ? { renderer: attitudeRenderer, source: client } : undefined, [attitude, attitudeRenderer, client]);
+  const changeAttitude = useCallback((next: boolean) => client.updateSettings({ attitude: next }), [client]);
+  // The pad writes airspeed and altitude on its corners once the computer sends them; their chips then go.
+  const readingsArrived = useSyncExternalStore(client.subscribeAttitude, () => client.getAttitude()?.readings !== undefined);
+  const padReadings = instrument !== undefined && readingsArrived;
   const moveGrid = useCallback((grid: GridPosition) => client.updateSettings({ grid }), [client]);
+  const changeSliders = useCallback((next: SliderPress) => client.updateSettings({ sliders: next }), [client]);
+  const changeTwoFingers = useCallback((next: typeof twoFingers) => client.updateSettings({ twoFingers: next }), [client]);
   const yaw = useMemo((): YawSettings => ({ release: yawRelease, returnMs: yawReturnMs }), [yawRelease, yawReturnMs]);
   const changeYaw = useCallback((settings: YawSettings) => client.updateSettings({ yawRelease: settings.release, yawReturnMs: settings.returnMs }), [client]);
-  const changeTwoFingers = useCallback((next: typeof twoFingers) => client.updateSettings({ twoFingers: next }), [client]);
   const rudder = useCallback((value: number) => client.updateControls({ rudder: value }), [client]);
   const stick = useCallback((x: number, y: number, input?: InputTiming) => client.updateControls({ aileron: x, elevator: -y }, input), [client]);
   // The desktop's own drag signs: right orbits right, down lifts the camera.
@@ -66,6 +80,20 @@ export function PhoneController({ client, onPair }: { client: PhoneControllerCli
   );
   // An absent `gearDown` means the host predates gear support; do not offer it.
   const gearKnown = status?.gearDown !== undefined;
+  // Absent from a host without flap automation: no AUTO then.
+  const autoFlaps = status?.autoFlaps;
+  // The HUD's AUTO TRIM corner, from a host with trim assists; an older one gets the centring buttons.
+  const autoTrim = status?.autoTrim;
+  const autoTrimButton = (axis: "pitch" | "roll") => {
+    const on = autoTrim![axis];
+    // The HUD's own wording, as its corner says it.
+    const title = on
+      ? `Trim assist on — the ${axis} wheel cancels leftover moment in real time, including while you fly. Tap to turn off.`
+      : `Trim assist off — tap to cancel leftover ${axis} moment on the trim wheel.`;
+    const words = axis === "roll" ? <><span>TRIM</span><span>AUTO</span></> : <><span>AUTO</span><span>TRIM</span></>;
+    return <button type="button" className={`flight-hud__auto-trim flight-hud__auto-trim--${axis}${on ? " is-on" : ""}`} disabled={locked}
+      aria-pressed={on} aria-label={title} title={title} onClick={() => client.setAutoTrim(axis, !on)}>{words}</button>;
+  };
   /**
    * The link chip says whose input has priority, at one fixed width, and the
    * client's full sentence goes to assistive tech. A link gone
@@ -83,17 +111,20 @@ export function PhoneController({ client, onPair }: { client: PhoneControllerCli
     {scanning && onPair && <PhoneQrScanner onScan={onPair} onClose={() => setScanning(false)} />}
     <section className={`phone-controls phone-controls--grid-${gridPosition}`} aria-label="Aircraft controls">
       <div className="phone-cluster" aria-label="Attitude, trim and flaps">
-        <div className="flight-hud__auto-trims" role="group" aria-label="Center trim">
+        {autoTrim ? <div className="flight-hud__auto-trims" role="group" aria-label="Trim assists">
+          {autoTrimButton("roll")}
+          {autoTrimButton("pitch")}
+        </div> : <div className="flight-hud__auto-trims" role="group" aria-label="Center trim">
           <button type="button" className="flight-hud__auto-trim flight-hud__auto-trim--roll" disabled={locked}
             aria-label="Center roll trim" onClick={() => client.updateControls({ rollTrim: 0 })}><span>ROLL</span></button>
           <button type="button" className="flight-hud__auto-trim flight-hud__auto-trim--pitch" disabled={locked}
             aria-label="Center pitch trim" onClick={() => client.updateControls({ pitchTrim: 0 })}><span>PITCH</span></button>
-        </div>
+        </div>}
         <label className="flight-hud__lever flight-hud__lever--pitch">
           <span className="flight-hud__lever-meta"><span>PITCH</span><output>{percent(state.controls.pitchTrim)}</output></span>
           <span className="flight-hud__lever-track">
-            <PhoneControlRange orientation="vertical" actual={status?.actualControls?.pitchTrim} min="-1" max="1" step=".01" value={state.controls.pitchTrim} disabled={locked}
-              aria-label="Pitch trim" onChange={event => client.updateControls({ pitchTrim: Number(event.target.value) })} />
+            <PhoneControlRange orientation="vertical" actual={status?.actualControls?.pitchTrim} min="-1" max="1" step=".01" value={state.controls.pitchTrim} disabled={locked || autoTrim?.pitch === true}
+              aria-label="Pitch trim" press={sliders} onValue={value => client.updateControls({ pitchTrim: value })} />
           </span>
         </label>
         {/* Roll trim and the pad share a column of their own so the slider is
@@ -101,25 +132,32 @@ export function PhoneController({ client, onPair }: { client: PhoneControllerCli
         <div className="phone-cluster__pad">
           <label className="flight-hud__slider-control flight-hud__slider-control--roll-trim">
             <span>ROLL</span>
-            <PhoneControlRange orientation="horizontal" actual={status?.actualControls?.rollTrim} min="-1" max="1" step=".01" value={state.controls.rollTrim} disabled={locked}
-              aria-label="Roll trim" onChange={event => client.updateControls({ rollTrim: Number(event.target.value) })} />
+            <PhoneControlRange orientation="horizontal" actual={status?.actualControls?.rollTrim} min="-1" max="1" step=".01" value={state.controls.rollTrim} disabled={locked || autoTrim?.roll === true}
+              aria-label="Roll trim" press={sliders} onValue={value => client.updateControls({ rollTrim: value })} />
             <output>{percent(state.controls.rollTrim)}</output>
           </label>
-          <PhoneStick label="PITCH / ROLL" disabled={locked} onChange={stick} />
+          <PhoneStick label="PITCH / ROLL" disabled={locked} onChange={stick} instrument={instrument} />
         </div>
-        <label className="flight-hud__lever flight-hud__lever--flaps">
-          <span className="flight-hud__lever-meta"><span>FLAPS</span><output>{percent(state.controls.flaps)}</output></span>
+        {/* A div, as the HUD's: a label would name its first control, AUTO, rather than the slider. */}
+        <div className="flight-hud__lever flight-hud__lever--flaps">
+          <span className="flight-hud__lever-meta">
+            <span>FLAPS</span>
+            {autoFlaps !== undefined && <button type="button" className={`flight-hud__auto-button${autoFlaps ? " is-on" : ""}`}
+              disabled={locked} aria-pressed={autoFlaps} onClick={() => client.setAutoFlaps(!autoFlaps)}
+              title={autoFlaps ? "Automatic flaps on. Move the slider to take over manually." : "Automatic flaps off. Tap to resume automatic control."}>AUTO</button>}
+            <output>{percent(state.controls.flaps)}</output>
+          </span>
           <span className="flight-hud__lever-track">
             <PhoneControlRange orientation="vertical" actual={status?.actualControls?.flaps} min="0" max="1" step=".01" value={state.controls.flaps} disabled={locked}
-              aria-label="Flaps" onChange={event => client.updateControls({ flaps: Number(event.target.value) })} />
+              aria-label="Flaps" press={sliders} onValue={value => client.updateControls({ flaps: value })} />
           </span>
-        </label>
+        </div>
       </div>
       <div className={`phone-yaw-throttle${engine ? " phone-yaw-throttle--engine" : ""}`} aria-label="Yaw, engine, camera and throttle">
         {/* Rudder is a transient control by default: releasing it returns to
             centre, the way letting go of the desktop slider does. Settings →
             Yaw decides that, and how long the return takes. */}
-        <PhoneYaw value={state.controls.rudder} actual={status?.actualControls?.rudder} disabled={locked} settings={yaw} onChange={rudder} />
+        <PhoneYaw value={state.controls.rudder} actual={status?.actualControls?.rudder} disabled={locked} settings={yaw} press={sliders} onChange={rudder} />
         {/* The desktop HUD's engine widget, just above the throttle it answers to,
             notched into the camera pad's corner rather than widening the column. */}
         {engine && <PhoneEngine engine={engine} paused={status?.paused ?? true} />}
@@ -134,15 +172,15 @@ export function PhoneController({ client, onPair }: { client: PhoneControllerCli
         {/* The desktop HUD's own throttle lever, engine start and shutdown included. */}
         <PhoneThrottle value={state.controls.throttle} brake={state.leverBrake} brakeRange={status?.throttleBrakeRange === true}
           actualThrottle={status?.actualControls?.throttle}
-          keepBrakes={status?.keepSliderBrakes === true} afterburnerDetent={status?.afterburnerDetent} engine={engine} disabled={locked}
+          keepBrakes={status?.keepSliderBrakes === true} afterburnerDetent={status?.afterburnerDetent} engine={engine} disabled={locked} press={sliders}
           onChange={throttle} onPowerChange={power} onStartHold={starter} onShutdown={shutdown} />
       </div>
       {/* Everything that is not a flight surface, in one chip grid at FOSS Earth
           HUD density: instruments first, then the buttons. Below the controls
           by default, above them if Settings says so; never a separate bar. */}
       <div className="phone-actions" aria-label="Instruments and buttons">
-        {tape("IAS", "kt", status ? pad(String(Math.round(status.airspeedKts)), 3) : "---")}
-        {tape("ALT", "ft", status ? pad(String(Math.round(status.altitudeFt)), 5) : "-----")}
+        {!padReadings && tape("IAS", "kt", status ? pad(String(Math.round(status.airspeedKts)), 3) : "---")}
+        {!padReadings && tape("ALT", "ft", status ? pad(String(Math.round(status.altitudeFt)), 5) : "-----")}
         {tape("HDG", "°", status ? pad(String(Math.round(status.headingDeg) % 360), 3) : "---")}
         <button type="button" className={`flight-hud__gear${status?.gearDown ? " is-down" : ""}`}
           disabled={locked || !gearKnown} onClick={() => client.setGearDown(!status?.gearDown)}
@@ -181,6 +219,7 @@ export function PhoneController({ client, onPair }: { client: PhoneControllerCli
         </span>
         <PhoneFullscreenButton offer={fullscreen} />
         <PhoneSettings gridPosition={gridPosition} onGridPositionChange={moveGrid} yaw={yaw} onYawChange={changeYaw}
+          attitude={attitude} onAttitudeChange={changeAttitude} sliders={sliders} onSlidersChange={changeSliders}
           twoFingers={twoFingers} onTwoFingersChange={changeTwoFingers} />
         <PhoneBrowserData />
         {/* Last in the grid. A chip like the rest, held rather than tapped. */}
@@ -188,4 +227,17 @@ export function PhoneController({ client, onPair }: { client: PhoneControllerCli
       </div>
     </section>
   </main>;
+}
+
+/** The attitude indicator's renderer, loaded the first time the pad wants it; null until then, or if it cannot load. */
+function useAttitudeRenderer(load: LoadPhoneAttitude | undefined): PhoneAttitudeRenderer | null {
+  const [loaded, setLoaded] = useState<{ load: LoadPhoneAttitude; renderer: PhoneAttitudeRenderer } | null>(null);
+  useEffect(() => {
+    if (!load) return;
+    let live = true;
+    load().then(renderer => { if (live) setLoaded({ load, renderer }); },
+      (error: unknown) => { console.warn("Phone controller: the attitude indicator could not load; the pad stays plain.", error); });
+    return () => { live = false; };
+  }, [load]);
+  return load && loaded?.load === load ? loaded.renderer : null;
 }

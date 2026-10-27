@@ -105,9 +105,13 @@
   pointer-events: auto;
 }
 
-.flight-hud__gear:hover,
-.flight-hud__ap:hover {
-  border-color: var(--ctl-line-strong);
+/* Only where a pointer really hovers: a phone keeps the last button tapped
+   "hovered", which reads as that button being on. */
+@media (hover: hover) {
+  .flight-hud__gear:hover,
+  .flight-hud__ap:hover {
+    border-color: var(--ctl-line-strong);
+  }
 }
 
 .flight-hud__gear:focus-visible,
@@ -196,8 +200,10 @@
   padding: 0 0 3px 3px;
 }
 
-.flight-hud__auto-trim:hover {
-  background: var(--ctl-hover);
+@media (hover: hover) {
+  .flight-hud__auto-trim:hover {
+    background: var(--ctl-hover);
+  }
 }
 
 .flight-hud__auto-trim:focus-visible {
@@ -264,8 +270,8 @@
 
 /* ---- The throttle lever (`throttleLever.ts`): a slider that also starts
    and stops the engine. Drawn rather than native, so the ring can sit exactly
-   round the handle; it keeps the native lever's look. The host sets
-   `--throttle-handle` for its size. ---- */
+   round the handle; it keeps the native lever's look: a hollow handle on a
+   bare track. The host sets `--throttle-handle` for its size. ---- */
 
 .flight-throttle {
   --throttle-handle: 14px;
@@ -301,15 +307,6 @@
   background: var(--ctl-line-strong);
 }
 
-.flight-throttle__fill {
-  position: absolute;
-  right: 0;
-  bottom: calc(var(--throttle-fill-start, 0) * 100%);
-  left: 0;
-  height: calc(var(--throttle-fill-size, var(--throttle-value)) * 100%);
-  background: var(--ctl-accent);
-}
-
 /* The lower fifth is brakes; the cross-mark is throttle idle and brake release. */
 [data-brake-range="true"] .flight-throttle__track {
   background: linear-gradient(to top, color-mix(in srgb, var(--ctl-danger) 45%, transparent) 20%, var(--ctl-line-strong) 20%);
@@ -330,9 +327,8 @@
   display: block;
 }
 
-[data-power="brake"] .flight-throttle__fill,
 [data-power="brake"] .flight-throttle__handle {
-  background: var(--ctl-danger);
+  border-color: var(--ctl-danger);
 }
 
 .flight-throttle__handle {
@@ -342,9 +338,11 @@
   width: var(--throttle-handle);
   height: var(--throttle-handle);
   margin-left: calc(var(--throttle-handle) / -2);
+  box-sizing: border-box;
+  border: 2px solid var(--ctl-accent);
   border-radius: 50%;
-  background: var(--ctl-accent);
-  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.45), 0 1px 3px rgba(0, 0, 0, 0.5);
+  background: transparent;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.45), inset 0 0 0 1px rgba(0, 0, 0, 0.45), 0 1px 3px rgba(0, 0, 0, 0.5);
 }
 
 /* The ring round the handle: a start's spool-up, or the hold that shuts it down. */
@@ -400,7 +398,7 @@
 }
 
 [data-engine="stopped"]:not([data-hold]):not([data-power="brake"]) .flight-throttle__handle {
-  background: var(--ctl-muted);
+  border-color: var(--ctl-muted);
 }
 
 [data-engine="stopped"]:not([data-hold]):not([data-power="brake"]) output {
@@ -602,8 +600,9 @@
   touch-action: none;
 }
 
-/* The round native thumb is the command; a passive I-beam marks physical travel.
-   One thumb size fixes both endpoint offsets across browsers and orientations. */
+/* The hollow round native thumb is the command; a passive I-beam marks physical
+   travel. One thumb size fixes both endpoint offsets across browsers and
+   orientations. */
 .flight-control-position {
   --control-thumb: 10px;
   --control-actual: 0;
@@ -635,12 +634,13 @@
 .flight-control-position > input[type="range"]::-webkit-slider-thumb {
   appearance: none;
   -webkit-appearance: none;
+  box-sizing: border-box;
   width: var(--control-thumb);
   height: var(--control-thumb);
-  border: 0;
+  border: 2px solid var(--ctl-accent);
   border-radius: 50%;
-  background: var(--ctl-accent);
-  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.65);
+  background: transparent;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.65), inset 0 0 0 1px rgba(0, 0, 0, 0.65);
 }
 .flight-control-position--horizontal > input[type="range"]::-webkit-slider-thumb { margin-top: -3px; }
 .flight-control-position--vertical > input[type="range"]::-webkit-slider-thumb { margin-left: -3px; }
@@ -653,18 +653,31 @@
   background: var(--ctl-line-strong);
 }
 .flight-control-position > input[type="range"]::-moz-range-thumb {
+  box-sizing: border-box;
   width: var(--control-thumb);
   height: var(--control-thumb);
-  border: 0;
+  border: 2px solid var(--ctl-accent);
   border-radius: 50%;
-  background: var(--ctl-accent);
-  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.65);
+  background: transparent;
+  box-shadow: 0 0 0 1px rgba(0, 0, 0, 0.65), inset 0 0 0 1px rgba(0, 0, 0, 0.65);
 }
 .flight-control-position--horizontal > input[type="range"]::-moz-range-track { width: 100%; }
 .flight-control-position--vertical > input[type="range"]::-moz-range-track { height: 100%; }
 .flight-control-position > input[type="range"]:focus-visible { outline: 2px solid var(--ctl-focus); outline-offset: 2px; }
+/* On the phone the box round the range takes the finger (`sliderPointer.ts`),
+   as Settings → Sliders says; the range itself only draws and takes keys. */
+.flight-control-position[data-slider-pointer] {
+  cursor: pointer;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+  -webkit-touch-callout: none;
+  -webkit-tap-highlight-color: transparent;
+}
+.flight-control-position[data-slider-pointer] > input[type="range"] { pointer-events: none; }
 .flight-control-position__actual,
-.flight-throttle__actual {
+.flight-throttle__actual,
+.flight-throttle__gauge {
   position: absolute;
   z-index: 2;
   background: #e8eef0;
@@ -672,7 +685,8 @@
   pointer-events: none;
 }
 .flight-control-position__actual[hidden],
-.flight-throttle__actual[hidden] { display: none; }
+.flight-throttle__actual[hidden],
+.flight-throttle__gauge[hidden] { display: none; }
 .flight-control-position--horizontal > .flight-control-position__actual {
   top: 50%;
   left: calc(var(--control-thumb) / 2 + (100% - var(--control-thumb)) * var(--control-actual));
@@ -690,7 +704,9 @@
 .flight-control-position__actual::before,
 .flight-control-position__actual::after,
 .flight-throttle__actual::before,
-.flight-throttle__actual::after { content: ""; position: absolute; background: inherit; box-shadow: inherit; }
+.flight-throttle__actual::after,
+.flight-throttle__gauge::before,
+.flight-throttle__gauge::after { content: ""; position: absolute; background: inherit; box-shadow: inherit; }
 .flight-control-position--horizontal > .flight-control-position__actual::before,
 .flight-control-position--horizontal > .flight-control-position__actual::after { left: -3px; width: 8px; height: 2px; }
 .flight-control-position--horizontal > .flight-control-position__actual::before { top: 0; }
@@ -698,15 +714,159 @@
 .flight-control-position--vertical > .flight-control-position__actual::before,
 .flight-control-position--vertical > .flight-control-position__actual::after,
 .flight-throttle__actual::before,
-.flight-throttle__actual::after { top: -3px; width: 2px; height: 8px; }
+.flight-throttle__actual::after,
+.flight-throttle__gauge::before,
+.flight-throttle__gauge::after { top: -3px; width: 2px; height: 8px; }
 .flight-control-position--vertical > .flight-control-position__actual::before,
-.flight-throttle__actual::before { left: 0; }
+.flight-throttle__actual::before,
+.flight-throttle__gauge::before { left: 0; }
 .flight-control-position--vertical > .flight-control-position__actual::after,
-.flight-throttle__actual::after { right: 0; }
+.flight-throttle__actual::after,
+.flight-throttle__gauge::after { right: 0; }
 .flight-throttle__actual {
   left: 50%;
   bottom: calc(var(--throttle-handle) / 2 + (100% - var(--throttle-handle)) * var(--throttle-actual));
   width: calc(var(--throttle-handle) + 4px);
   height: 2px;
   transform: translate(-50%, 50%);
+}
+/* How fast the engine turns, on the lever's own scale (`throttleLeverGauges`):
+   blue N1, green N2, or a piston's RPM in blue. Under the white actual-throttle
+   I-beam; each named on its own side, so N1 and N2 can sit close. */
+.flight-throttle__gauge {
+  --throttle-gauge-color: #8fc8f0;
+  z-index: 1;
+  left: 50%;
+  bottom: calc(var(--throttle-handle) / 2 + (100% - var(--throttle-handle)) * var(--throttle-gauge, 0));
+  width: calc(var(--throttle-handle) + 4px);
+  height: 2px;
+  transform: translate(-50%, 50%);
+  background: var(--throttle-gauge-color);
+}
+.flight-throttle__gauge[data-gauge="n2"] { --throttle-gauge-color: #86d99a; }
+.flight-throttle__gauge-label {
+  position: absolute;
+  top: 50%;
+  right: calc(100% + 3px);
+  transform: translateY(-50%);
+  color: var(--throttle-gauge-color);
+  font-size: 7px;
+  font-weight: 700;
+  line-height: 1;
+  letter-spacing: 0.02em;
+  text-shadow: 0 0 2px #000, 0 0 2px #000;
+  white-space: nowrap;
+}
+.flight-throttle__gauge[data-gauge="n2"] .flight-throttle__gauge-label { right: auto; left: calc(100% + 3px); }
+
+/* ---- AUTO on the flaps lever: lit while automatic flaps fly them. ---- */
+
+.flight-hud__auto-button {
+  width: max-content;
+  padding: 2px 3px;
+  border: 1px solid currentColor;
+  border-radius: 3px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+
+.flight-hud__auto-button.is-on {
+  color: var(--flight-panel-accent, var(--ctl-accent));
+}
+
+.flight-hud__auto-button:disabled {
+  cursor: default;
+  opacity: 0.4;
+}
+
+/* ---- Reading tints. ---- */
+
+/*
+ * Airspeed, angle of attack and load, tinted by their value: green while it is
+ * comfortable, through yellow, to red at the stall or the aircraft's limit
+ * (fly's instrumentBands.ts). The HUD, and the phone from what the computer
+ * sends, set `--hud-tint`, 0 to 1, on the chip or on the slot round it, and
+ * every layout reads it.
+ */
+:is(.flight-hud__tape[data-tint], [data-tint] > .flight-hud__tape) {
+  --hud-tint-hue: calc(130 - 130 * var(--hud-tint, 0));
+  border-color: hsl(var(--hud-tint-hue) 85% 52% / 0.9);
+  background: hsl(var(--hud-tint-hue) 75% 15% / 0.75);
+  color: hsl(var(--hud-tint-hue) 90% 68%);
+}
+
+:is(.flight-hud__tape[data-tint], [data-tint] > .flight-hud__tape) .flight-hud__tape-header {
+  color: inherit;
+  opacity: 0.8;
+}
+
+/*
+ * Vertical speed, coloured as the attitude indicator: dark brown descending,
+ * white level, dark blue climbing. The HUD and the phone set `--hud-vs-mix`, 0
+ * level to 1 at the aircraft's full scale, its direction, and dark ink on the
+ * pale end.
+ */
+.flight-hud__tape[data-vs-tint] {
+  --hud-vs-end: hsl(218 72% 24%);
+  --hud-vs-fill: color-mix(in oklab, var(--hud-vs-end) calc(var(--hud-vs-mix, 0) * 100%), #f4f6f9);
+  border-color: color-mix(in oklab, var(--hud-vs-fill), #000 35%);
+  background: var(--hud-vs-fill);
+  color: #f4f6f9;
+}
+
+.flight-hud__tape[data-vs-tint][data-vs-direction="down"] {
+  --hud-vs-end: hsl(26 62% 20%);
+}
+
+.flight-hud__tape[data-vs-tint][data-vs-ink="dark"] {
+  color: #111827;
+  text-shadow: none;
+}
+
+.flight-hud__tape[data-vs-tint] .flight-hud__tape-header {
+  color: inherit;
+  opacity: 0.8;
+}
+
+/*
+ * The readings on the attitude indicator's corners: the HUD's Compact layout
+ * and the phone's pad. Each host places them; here is how they look. The text
+ * keeps a shadow so it reads over a bright sky.
+ */
+.flight-hud__attitude-readings {
+  text-shadow: 0 1px 2px rgba(0, 0, 0, 0.85);
+}
+
+/* Value over its label, as the toolbar's readings. */
+.flight-hud__attitude-readings .flight-hud__tape {
+  flex-direction: column-reverse;
+  gap: 0;
+  padding: 2px 5px;
+  border-radius: 6px;
+}
+
+/* The ball shows through a reading with no tint to show. */
+.flight-hud__attitude-readings .flight-hud__tape:not([data-tint], [data-vs-tint], [data-tint] > *) {
+  background: transparent;
+  border-color: transparent;
+}
+
+/* Brighter than the row's muted labels: these sit over the sky. */
+.flight-hud__attitude-readings .flight-hud__tape-header {
+  gap: 2px;
+  color: rgba(232, 237, 245, 0.85);
+}
+
+.flight-hud__attitude-readings :is(.flight-hud__label, .flight-hud__unit) {
+  font-size: 8px;
+}
+
+.flight-hud__attitude-readings .flight-hud__value {
+  font-size: 12px;
+}
+
+.flight-hud__attitude-readings :is(.flight-hud__tape[data-tint], [data-tint] > .flight-hud__tape) {
+  background: hsl(var(--hud-tint-hue) 75% 15% / 0.6);
 }

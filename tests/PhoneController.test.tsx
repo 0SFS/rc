@@ -17,7 +17,8 @@ vi.mock('../src/PhoneQrScanner', async () => {
 })
 import { PhoneController } from '../src/PhoneController'
 import { createConnectionLog } from '../src/connectionDiagnostics'
-import { NEUTRAL_CONTROLS, type AircraftStatus, type EngineStatus, type PhoneControllerSettings } from '../src/protocol'
+import { NEUTRAL_CONTROLS, type AircraftStatus, type EngineStatus, type PhoneAttitude, type PhoneControllerSettings } from '../src/protocol'
+import type { LoadPhoneAttitude } from '../src/phoneAttitudeInstrument'
 import type { PhoneControllerClient, PhoneControllerSnapshot } from '../src/phoneControllerClient'
 import { DEFAULT_PHONE_SETTINGS } from '../src/phoneSettingsStore'
 
@@ -41,12 +42,16 @@ const setViewMode = vi.fn(() => true)
 const requestControl = vi.fn(() => true)
 const setStarterHeld = vi.fn()
 const shutdownEngine = vi.fn(() => true)
+const setAutoFlaps = vi.fn(() => true)
+const setAutoTrim = vi.fn(() => true)
 
-function mount({ engine, status, snapshot, onPair }: {
+function mount({ engine, status, snapshot, onPair, loadAttitude, attitude = null }: {
   engine?: EngineStatus
   status?: Partial<AircraftStatus>
   snapshot?: Partial<PhoneControllerSnapshot>
   onPair?(url: string): void
+  loadAttitude?: LoadPhoneAttitude
+  attitude?: PhoneAttitude | null
 } = {}): void {
   const aircraft: AircraftStatus = {
     owner: 'phone', paused: false, viewMode: 'third', controls: NEUTRAL_CONTROLS,
@@ -63,10 +68,11 @@ function mount({ engine, status, snapshot, onPair }: {
     subscribe: listener => { listeners.add(listener); return () => { listeners.delete(listener) } },
     getSnapshot: () => state,
     updateControls, updatePower, nudgeCamera, setCameraFingers, cancelTransientControls: vi.fn(), requestControl,
-    setPaused, setViewMode, setGearDown: () => true, setStarterHeld, shutdownEngine, releaseControl: () => true, setPriority: () => true,
+    setPaused, setViewMode, setGearDown: () => true, setAutoFlaps, setAutoTrim, setStarterHeld, shutdownEngine, releaseControl: () => true, setPriority: () => true,
     setHapticsEnabled, updateSettings, destroy: vi.fn(),
+    getAttitude: () => attitude, subscribeAttitude: () => () => {},
   }
-  act(() => root.render(<PhoneController client={client} onPair={onPair} />))
+  act(() => root.render(<PhoneController client={client} onPair={onPair} loadAttitude={loadAttitude} />))
 }
 const remount = (options?: Parameters<typeof mount>[0]) => {
   act(() => root.unmount())
@@ -89,12 +95,11 @@ const drag = (input: HTMLInputElement, value: string) => {
   act(() => { input.dispatchEvent(new Event('input', { bubbles: true })) })
 }
 const yawTrack = () => container.querySelector<HTMLInputElement>('.phone-yaw input[type="range"]')!
+/** The box round the yaw range, which takes the finger; see sliderPointer.ts. */
+const yawSurface = () => container.querySelector<HTMLElement>('.phone-yaw .flight-control-position')!
+/** Where on the 200 px track (a 10 px thumb at each end) the yaw handle sits at this rudder. */
+const yawAt = (rudder: number) => 5 + (rudder + 1) / 2 * 190
 const yawReturn = () => updateControls.mock.calls.at(-1)![0].rudder as number
-const windowPointer = (type: string, pointerId: number) => {
-  const event = new Event(type, { bubbles: true, cancelable: true })
-  Object.assign(event, { pointerId })
-  act(() => { window.dispatchEvent(event) })
-}
 
 beforeEach(() => {
   Object.assign(globalThis, { IS_REACT_ACT_ENVIRONMENT: true })
@@ -116,6 +121,8 @@ beforeEach(() => {
   requestControl.mockClear()
   setStarterHeld.mockClear()
   shutdownEngine.mockClear()
+  setAutoFlaps.mockClear()
+  setAutoTrim.mockClear()
   vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue(
     { x: 0, y: 0, left: 0, top: 0, right: 200, bottom: 200, width: 200, height: 200, toJSON: () => ({}) })
   Object.defineProperties(HTMLElement.prototype, {
@@ -435,43 +442,184 @@ describe('phone controller screen', () => {
     expect(storage.size).toBe(0)
   })
 
+  it("draws the flight's attitude indicator in the pitch/roll pad unless Settings asks for the plain one", async () => {
+    const instrument = { draw: vi.fn(), destroy: vi.fn() }
+    const renderer = { halfShare: .5, mount: vi.fn(() => instrument) }
+    const loadAttitude = vi.fn(() => Promise.resolve(renderer))
+    const attitude = { rollRad: .2, pitchRad: 0, headingRad: 0, northVelocityFps: 0, eastVelocityFps: 0, verticalSpeedFps: 0, aileron: 0, elevator: 0 }
+    mount({ loadAttitude, attitude })
+    await act(async () => { await Promise.resolve() })
+    const pad = () => container.querySelector('.phone-stick:not(.phone-stick--rudder)')!
+    expect(pad().classList).toContain('phone-stick--attitude')
+    expect(renderer.mount).toHaveBeenCalledWith(pad().querySelector('.phone-stick__instrument'))
+
+    const plain = container.querySelector<HTMLInputElement>('.phone-settings input[name="phone-attitude"][value="off"]')!
+    act(() => { plain.click() })
+    expect(updateSettings).toHaveBeenLastCalledWith({ attitude: false })
+    expect(pad().classList).not.toContain('phone-stick--attitude')
+    expect(pad().querySelector('.phone-stick__instrument')).toBeNull()
+    expect(instrument.destroy).toHaveBeenCalledTimes(1)
+
+    // Turned off from the start, the renderer is never even fetched.
+    loadAttitude.mockClear()
+    remount({ loadAttitude, attitude, snapshot: { settings: { ...DEFAULT_PHONE_SETTINGS, attitude: false } } })
+    expect(loadAttitude).not.toHaveBeenCalled()
+    expect(container.querySelector<HTMLInputElement>('.phone-settings input[name="phone-attitude"][value="off"]')!.checked).toBe(true)
+  })
+
+  it("writes the flight's readings on the pad's corners instead of the grid's IAS and ALT", async () => {
+    const renderer = { halfShare: .5, mount: vi.fn(() => ({ draw: vi.fn(), destroy: vi.fn() })) }
+    const loadAttitude = vi.fn(() => Promise.resolve(renderer))
+    const plain = { rollRad: 0, pitchRad: 0, headingRad: Math.PI / 2, northVelocityFps: 0, eastVelocityFps: 0, verticalSpeedFps: -8.5, aileron: 0, elevator: 0 }
+    const attitude: PhoneAttitude = { ...plain, readings: { iasKt: 92, altitudeFt: 4250, aoaDeg: 4.5, tints: { ias: .4, vs: -.7 } } }
+    // The pad draws on the next animation frame.
+    const frames: FrameRequestCallback[] = []
+    vi.stubGlobal('requestAnimationFrame', (callback: FrameRequestCallback) => frames.push(callback))
+    const drawFrame = async () => {
+      await act(async () => { await Promise.resolve() })
+      act(() => { for (const frame of frames.splice(0)) frame(0) })
+    }
+    mount({ loadAttitude, attitude })
+    await drawFrame()
+    const corner = (reading: string) => container.querySelector<HTMLElement>(`.phone-stick__readings [data-reading="${reading}"]`)!
+    const value = (reading: string) => corner(reading).querySelector('.flight-hud__value')!.textContent
+    expect([value('ias'), value('hdg'), value('vs'), value('aoa'), value('alt')]).toEqual(['092', '090', '- 510', ' 4.5', '4250'])
+    expect(corner('ias').style.getPropertyValue('--hud-tint')).toBe('0.40')
+    expect(corner('aoa').dataset.tint).toBeUndefined()
+    expect(corner('vs').dataset).toMatchObject({ vsDirection: 'down', vsInk: 'light' })
+    expect([...grid().querySelectorAll('.flight-hud__label')].map(label => label.textContent)).toEqual(['HDG'])
+
+    // A computer that sends no readings keeps them in the grid, and the corners say only what the attitude does.
+    remount({ loadAttitude, attitude: plain })
+    await drawFrame()
+    expect([...grid().querySelectorAll('.flight-hud__label')].map(label => label.textContent)).toEqual(['IAS', 'ALT', 'HDG'])
+    expect(['ias', 'aoa', 'alt'].map(reading => corner(reading).hidden)).toEqual([true, true, true])
+    expect(value('hdg')).toBe('090')
+  })
+
+  it('switches automatic flaps from AUTO on the flaps lever, on a computer that has them', () => {
+    mount({ status: { autoFlaps: false } })
+    const auto = () => button('AUTO')!
+    expect(auto().getAttribute('aria-pressed')).toBe('false')
+    act(() => { auto().click() })
+    expect(setAutoFlaps).toHaveBeenLastCalledWith(true)
+    remount({ status: { autoFlaps: true } })
+    expect(auto().classList).toContain('is-on')
+    act(() => { auto().click() })
+    expect(setAutoFlaps).toHaveBeenLastCalledWith(false)
+    remount()
+    expect(button('AUTO')).toBeUndefined()
+  })
+
+  it("switches each trim assist from the HUD's AUTO TRIM corner, on its own", () => {
+    mount({ status: { autoTrim: { pitch: false, roll: false } } })
+    const corner = (axis: 'pitch' | 'roll') => container.querySelector<HTMLButtonElement>(`.flight-hud__auto-trim--${axis}`)!
+    const slider = (label: string) => container.querySelector<HTMLInputElement>(`input[aria-label="${label}"]`)!
+    expect(corner('roll').textContent).toBe('TRIMAUTO')
+    expect(corner('pitch').textContent).toBe('AUTOTRIM')
+    act(() => { corner('roll').click() })
+    expect(setAutoTrim).toHaveBeenLastCalledWith('roll', true)
+    // The computer says roll is on. Pitch stays as it was, and its own tap turns only it on.
+    remount({ status: { autoTrim: { pitch: false, roll: true } } })
+    expect(corner('roll').classList).toContain('is-on')
+    expect(corner('roll').getAttribute('aria-pressed')).toBe('true')
+    expect(corner('pitch').classList).not.toContain('is-on')
+    // As on the HUD, an axis's trim is the assist's while it is on.
+    expect(slider('Roll trim').disabled).toBe(true)
+    expect(slider('Pitch trim').disabled).toBe(false)
+    act(() => { corner('pitch').click() })
+    expect(setAutoTrim).toHaveBeenLastCalledWith('pitch', true)
+    remount({ status: { autoTrim: { pitch: true, roll: true } } })
+    expect([corner('roll'), corner('pitch')].map(button => button.classList.contains('is-on'))).toEqual([true, true])
+    act(() => { corner('roll').click() })
+    expect(setAutoTrim).toHaveBeenLastCalledWith('roll', false)
+    expect(setAutoTrim).toHaveBeenCalledTimes(3)
+
+    // A computer without trim assists keeps the corner that centres trim.
+    remount()
+    act(() => { button('Center roll trim')!.click() })
+    expect(updateControls).toHaveBeenLastCalledWith({ rollTrim: 0 })
+    expect(slider('Roll trim').disabled).toBe(false)
+  })
+
+  it("draws the engine's spools beside the throttle lever", () => {
+    mount({ engine: { phase: 'RUNNING', kind: 'turbine', n1: 41, n2: 78, maxN2: 104, state: 'running', start: 1 } })
+    const gauge = (name: string) => container.querySelector<HTMLElement>(`.phone-throttle [data-gauge="${name}"]`)!
+    expect(gauge('n1').style.getPropertyValue('--throttle-gauge')).toBe('0.41')
+    expect(gauge('n2').style.getPropertyValue('--throttle-gauge')).toBe('0.75')
+    remount({ engine: { phase: 'RUNNING', kind: 'piston', rpm: 1350, maxRpm: 2700, state: 'running', start: 1 } })
+    expect(gauge('rpm').style.getPropertyValue('--throttle-gauge')).toBe('0.5')
+    expect(container.querySelector('.phone-throttle [data-gauge="n1"]')).toBeNull()
+  })
+
   it('draws the yaw slider where the rudder is, and returns it to centre on release', () => {
     // The regression this component exists for: the value comes from the
     // client's control state, so the thumb is wherever the aircraft's rudder is.
     mount({ snapshot: { controls: { ...NEUTRAL_CONTROLS, rudder: -.42 } } })
     expect(yawTrack().value).toBe('-0.42')
     expect(text('.phone-yaw output')).toBe('-42%')
-    pointer(yawTrack(), 'pointerdown')
-    pointer(yawTrack(), 'pointerup')
+    pointer(yawSurface(), 'pointerdown', { clientX: yawAt(-.42) })
+    pointer(yawSurface(), 'pointerup')
     expect(updateControls).toHaveBeenLastCalledWith({ rudder: 0 })
   })
 
-  it.each(['pointerup', 'pointercancel'])('centres yaw when its active pointer sends %s outside the input', type => {
-    mount({ snapshot: { controls: { ...NEUTRAL_CONTROLS, rudder: .6 } } })
-    pointer(yawTrack(), 'pointerdown', { pointerId: 7 })
-    expect(yawTrack().setPointerCapture).toHaveBeenCalledWith(7)
-    windowPointer(type, 8)
+  it('takes the yaw to the finger, wherever on the track it lands, and follows it', () => {
+    mount()
+    pointer(yawSurface(), 'pointerdown', { clientX: yawAt(.5) })
+    expect(updateControls).toHaveBeenLastCalledWith({ rudder: .5 })
+    pointer(yawSurface(), 'pointermove', { clientX: yawAt(-.25) })
+    expect(updateControls).toHaveBeenLastCalledWith({ rudder: -.25 })
+    pointer(yawSurface(), 'pointerup')
+    expect(updateControls).toHaveBeenLastCalledWith({ rudder: 0 })
+  })
+
+  it('moves the yaw only from its handle when Settings says to grab it, and remembers that', () => {
+    mount({ snapshot: { controls: { ...NEUTRAL_CONTROLS, rudder: .5 } } })
+    act(() => { container.querySelector<HTMLInputElement>('.phone-settings input[name="phone-sliders"][value="grab"]')!.click() })
+    expect(updateSettings).toHaveBeenLastCalledWith({ sliders: 'grab' })
+    updateControls.mockClear()
+    // Off the handle, a press neither moves it nor takes it: no release follows.
+    pointer(yawSurface(), 'pointerdown', { clientX: yawAt(-.5) })
+    pointer(yawSurface(), 'pointerup')
     expect(updateControls).not.toHaveBeenCalled()
-    windowPointer(type, 7)
+    // On it, the handle goes as far as the finger does, from where it was.
+    pointer(yawSurface(), 'pointerdown', { clientX: yawAt(.5) + 4 })
+    pointer(yawSurface(), 'pointermove', { clientX: yawAt(.5) + 4 + 19 })
+    expect(updateControls).toHaveBeenLastCalledWith({ rudder: .7 })
+    pointer(yawSurface(), 'pointerup')
+    expect(updateControls).toHaveBeenLastCalledWith({ rudder: 0 })
+
+    remount({ snapshot: { settings: { ...DEFAULT_PHONE_SETTINGS, sliders: 'grab' } } })
+    expect(container.querySelector<HTMLInputElement>('.phone-settings input[name="phone-sliders"][value="grab"]')!.checked).toBe(true)
+  })
+
+  it.each(['pointerup', 'pointercancel', 'lostpointercapture'])('centres yaw when the finger that took it sends %s, wherever it lifts', type => {
+    mount({ snapshot: { controls: { ...NEUTRAL_CONTROLS, rudder: .6 } } })
+    pointer(yawSurface(), 'pointerdown', { pointerId: 7, clientX: yawAt(.6) })
+    // Held by the box round the range, so the browser cannot take the finger away mid-drag.
+    expect(yawSurface().setPointerCapture).toHaveBeenCalledWith(7)
+    pointer(yawSurface(), type, { pointerId: 8 })
+    expect(updateControls).not.toHaveBeenCalled()
+    pointer(yawSurface(), type, { pointerId: 7 })
     expect(updateControls).toHaveBeenLastCalledWith({ rudder: 0 })
     const sent = updateControls.mock.calls.length
-    windowPointer(type, 7)
+    pointer(yawSurface(), type, { pointerId: 7 })
     expect(updateControls.mock.calls).toHaveLength(sent)
   })
 
-  it.each(['pointerup', 'pointercancel'])('keeps yaw in hold mode when its pointer sends %s outside the input', type => {
+  it.each(['pointerup', 'pointercancel'])('keeps yaw in hold mode when its finger sends %s', type => {
     mount({ snapshot: { controls: { ...NEUTRAL_CONTROLS, rudder: .6 }, settings: { ...DEFAULT_PHONE_SETTINGS, yawRelease: 'hold' } } })
-    pointer(yawTrack(), 'pointerdown', { pointerId: 7 })
-    windowPointer(type, 7)
+    pointer(yawSurface(), 'pointerdown', { pointerId: 7, clientX: yawAt(.6) })
+    pointer(yawSurface(), type, { pointerId: 7 })
     expect(updateControls).not.toHaveBeenCalled()
     expect(yawTrack().value).toBe('0.6')
   })
 
-  it('centres once when the input release bubbles and capture is then lost', () => {
+  it('centres once when the finger lifts and capture is then lost', () => {
     mount({ snapshot: { controls: { ...NEUTRAL_CONTROLS, rudder: .6 } } })
-    pointer(yawTrack(), 'pointerdown', { pointerId: 7 })
-    pointer(yawTrack(), 'pointerup', { pointerId: 7 })
-    pointer(yawTrack(), 'lostpointercapture', { pointerId: 7 })
+    pointer(yawSurface(), 'pointerdown', { pointerId: 7, clientX: yawAt(.6) })
+    pointer(yawSurface(), 'pointerup', { pointerId: 7 })
+    pointer(yawSurface(), 'lostpointercapture', { pointerId: 7 })
     expect(updateControls.mock.calls).toEqual([[{ rudder: 0 }]])
   })
 
@@ -479,19 +627,20 @@ describe('phone controller screen', () => {
     vi.useFakeTimers()
     try {
       mount({ snapshot: { controls: { ...NEUTRAL_CONTROLS, rudder: 1 }, settings: { ...DEFAULT_PHONE_SETTINGS, yawReturnMs: 500 } } })
-      pointer(yawTrack(), 'pointerdown', { pointerId: 7 })
-      windowPointer('pointerup', 7)
+      pointer(yawSurface(), 'pointerdown', { pointerId: 7, clientX: yawAt(1) })
+      pointer(yawSurface(), 'pointerup', { pointerId: 7 })
       act(() => { vi.advanceTimersByTime(250) })
       expect(yawReturn()).toBeGreaterThan(.3)
       expect(yawReturn()).toBeLessThan(.7)
-      pointer(yawTrack(), 'pointerdown', { pointerId: 8 })
+      // On the handle where the screen still draws it, so the press itself moves nothing.
+      pointer(yawSurface(), 'pointerdown', { pointerId: 8, clientX: yawAt(1) })
       const sent = updateControls.mock.calls.length
       act(() => { vi.advanceTimersByTime(300) })
       expect(updateControls.mock.calls).toHaveLength(sent)
-      windowPointer('pointerup', 7)
+      pointer(yawSurface(), 'pointerup', { pointerId: 7 })
       act(() => { vi.advanceTimersByTime(100) })
       expect(updateControls.mock.calls).toHaveLength(sent)
-      windowPointer('pointerup', 8)
+      pointer(yawSurface(), 'pointerup', { pointerId: 8 })
       act(() => { vi.advanceTimersByTime(550) })
       expect(updateControls).toHaveBeenLastCalledWith({ rudder: 0 })
     } finally { vi.useRealTimers() }
@@ -504,9 +653,9 @@ describe('phone controller screen', () => {
     // No return time to set: there is no return.
     expect(container.querySelector('.phone-settings__slider')).toBeNull()
     updateControls.mockClear()
-    pointer(yawTrack(), 'pointerdown')
-    pointer(yawTrack(), 'pointerup')
-    pointer(yawTrack(), 'pointercancel')
+    pointer(yawSurface(), 'pointerdown', { clientX: yawAt(.5) })
+    pointer(yawSurface(), 'pointerup')
+    pointer(yawSurface(), 'pointercancel')
     // React's onBlur is focusout; a bubbling `blur` would reach the window
     // listeners the stick and brake centre themselves from instead.
     act(() => { yawTrack().dispatchEvent(new Event('focusout', { bubbles: true })) })
@@ -531,8 +680,8 @@ describe('phone controller screen', () => {
     expect(updateSettings).toHaveBeenLastCalledWith({ yawRelease: 'center', yawReturnMs: 500 })
 
     updateControls.mockClear()
-    pointer(yawTrack(), 'pointerdown')
-    pointer(yawTrack(), 'pointerup')
+    pointer(yawSurface(), 'pointerdown', { clientX: yawAt(1) })
+    pointer(yawSurface(), 'pointerup')
     // Each step of the sweep is an ordinary rudder update, so the aircraft
     // yaws its way back rather than snapping.
     act(() => { vi.advanceTimersByTime(250) })

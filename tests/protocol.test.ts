@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 import {
   MAX_MESSAGE_BYTES, NEUTRAL_CONTROLS, isAiming, isCameraAim, isCentered, isControls, isCounter, isEngineStatus,
-  isControlTrace, isHapticFeedback, isProtocolVersionMismatch, neutralize, parseMessage,
+  isControlTrace, isHapticFeedback, isProtocolVersionMismatch, neutralize, parseMessage, phoneAttitude,
   type AircraftStatus, type ControlSurfaceState, type RemoteMessage,
 } from "../src/protocol";
 
@@ -26,6 +26,8 @@ const accepted: RemoteMessage[] = [
   { ...envelope, type: "status", status: { ...status, handBack: "now" }, message: "Desktop hidden · Simulation paused" },
   { ...envelope, type: "heartbeat", lease: 13, status: { ...status, handBack: "idle" } },
   { ...envelope, type: "heartbeat", lease: 14, status: { ...status, owner: "phone", blend: "computer" } },
+  { ...envelope, type: "heartbeat", lease: 15, status: { ...status, autoFlaps: true } },
+  { ...envelope, type: "heartbeat", lease: 16, status: { ...status, autoTrim: { pitch: true, roll: false } } },
   { ...envelope, type: "action", id: 1, lease: 2, action: "requestControl" },
   { ...envelope, type: "action", id: 2, lease: 3, action: "releaseControl" },
   { ...envelope, type: "action", id: 3, lease: 3, action: "setPaused", value: true },
@@ -35,6 +37,11 @@ const accepted: RemoteMessage[] = [
   { ...envelope, type: "action", id: 7, lease: 3, action: "shutdownEngine" },
   { ...envelope, type: "action", id: 8, lease: 3, action: "setPriority", value: "phone" },
   { ...envelope, type: "action", id: 9, lease: 3, action: "setPriority", value: "computer" },
+  { ...envelope, type: "action", id: 10, lease: 3, action: "setAutoFlaps", value: true },
+  { ...envelope, type: "action", id: 11, lease: 3, action: "setAutoFlaps", value: false },
+  { ...envelope, type: "action", id: 12, lease: 3, action: "setPitchAutoTrim", value: true },
+  { ...envelope, type: "action", id: 13, lease: 3, action: "setRollAutoTrim", value: false },
+  { ...envelope, type: "action", id: 14, lease: 3, action: "requestControl", input: 1 },
   { ...envelope, type: "ack", id: 2, ok: false, message: "Center controls to take over.", status },
   frame,
   { ...frame, seq: 124, camera: { yaw: -1, pitch: 0.25 } },
@@ -42,6 +49,7 @@ const accepted: RemoteMessage[] = [
   { ...frame, seq: 126, camera: { yaw: 0.012, pitch: 0 },
     trace: { at: 1234.5, by: 0, gated: 1, buf: 0, cam: [[1230.1, 1231.2, 12, 0, 2]], ctl: [[1229.9, 1230.4]], drop: [0, 0, 0] } },
   { ...frame, seq: 127, starter: 1 },
+  { ...frame, seq: 128, input: 1 },
   { ...envelope, type: "heartbeat", lease: 9,
     status: { ...status, engine: { phase: "RUNNING", n1: 72.4, n2: 88.1, thrustLbf: 1180, fuelFlowPph: 412 } } },
   { ...envelope, type: "heartbeat", lease: 10, status: { ...status, engine: { phase: "OFF" } } },
@@ -224,14 +232,22 @@ describe("phone protocol parsing", () => {
       { ...action, action: "setViewMode", value: true },
       { ...action, action: "reset" },
       { ...action, action: "shutdownEngine", value: true },
+      { ...action, action: "setAutoFlaps" },
+      { ...action, action: "setAutoFlaps", value: "on" },
+      { ...action, action: "setPitchAutoTrim" },
+      { ...action, action: "setRollAutoTrim", value: 1 },
     ];
     for (const value of invalid) expect(parseMessage(value), JSON.stringify(value)).toBeNull();
     expect(parseMessage({ ...envelope, type: "welcome", streamId: 65534, status })).not.toBeNull();
     for (const [key, value] of Object.entries({
       owner: "spectator", paused: "false", viewMode: "cockpit", controls: null,
-      airspeedKts: Infinity, altitudeFt: "4321", headingDeg: NaN,
+      airspeedKts: Infinity, altitudeFt: "4321", headingDeg: NaN, autoFlaps: 1,
     })) {
       expect(parseMessage({ ...envelope, type: "heartbeat", lease: 0, status: { ...status, [key]: value } })).toBeNull();
+    }
+    for (const autoTrim of [true, null, { pitch: true }, { pitch: "on", roll: false }, { pitch: true, roll: 0 }]) {
+      const value = { ...envelope, type: "heartbeat", lease: 0, status: { ...status, autoTrim } };
+      expect(parseMessage(value), JSON.stringify(autoTrim)).toBeNull();
     }
   });
 
@@ -311,14 +327,26 @@ describe("phone protocol parsing", () => {
     for (const starter of [0, true, "1", 2, null]) expect(parseMessage({ ...frame, starter })).toEqual(frame);
   });
 
+  it("drops an input mark that is anything but 1 without costing the frame its controls or the action itself", () => {
+    const action = { ...envelope, type: "action", id: 4, lease: 3, action: "setPaused", value: true };
+    for (const input of [0, true, "1", 2, null]) {
+      expect(parseMessage({ ...frame, input })).toEqual(frame);
+      expect(parseMessage({ ...action, input })).toEqual(action);
+    }
+  });
+
   it("carries the phone controller's settings both ways, bounded, with no epoch to match", () => {
-    const settings = { grid: "top", yawRelease: "hold", yawReturnMs: 450, haptics: true, twoFingers: "zoom" };
+    const settings = { grid: "top", yawRelease: "hold", yawReturnMs: 450, haptics: true, attitude: false, sliders: "grab", twoFingers: "zoom" };
     const message = { v: 1, type: "settings", session: "s", epoch: 0, settings, rev: 3 };
     expect(parseMessage(message)).toEqual(message);
-    // A peer that predates the camera pad's setting is read with its default.
+    // A peer that predates the attitude indicator's, the sliders' or the camera pad's setting is read with its default.
     const older: Partial<typeof settings> = { ...settings };
+    delete older.attitude;
+    delete older.sliders;
     delete older.twoFingers;
-    expect(parseMessage({ ...message, settings: older })).toEqual({ ...message, settings: { ...older, twoFingers: "both" } });
+    expect(parseMessage({ ...message, settings: older })).toEqual({ ...message, settings: { ...older, attitude: true, sliders: "jump", twoFingers: "both" } });
+    expect(parseMessage({ ...message, settings: { ...settings, attitude: "off" } })).toBeNull();
+    expect(parseMessage({ ...message, settings: { ...settings, sliders: "tap" } })).toBeNull();
     expect(parseMessage({ ...message, settings: { ...settings, twoFingers: "orbit" } })).toBeNull();
     expect(parseMessage({ ...message, initial: true })).toEqual({ ...message, initial: true });
     // Only `true` means initial; anything else is an ordinary change.
@@ -329,6 +357,58 @@ describe("phone protocol parsing", () => {
       { grid: "top", yawRelease: "hold", yawReturnMs: 0 },
     ]) expect(parseMessage({ ...message, settings: bad })).toBeNull();
     for (const rev of [-1, 1.5, "3", undefined]) expect(parseMessage({ ...message, rev })).toBeNull();
+  });
+
+  it("carries the phone's attitude indicator, its view optional, and drops anything out of bounds", () => {
+    const attitude = {
+      rollRad: .1, pitchRad: -.05, headingRad: 3.1, northVelocityFps: 120.5, eastVelocityFps: -3.25, verticalSpeedFps: 8,
+      aileron: .2, elevator: -.4,
+    };
+    const message = { v: 1, type: "attitude", session: "s", epoch: 2, attitude };
+    expect(parseMessage(message)).toEqual(message);
+    const view = [1, 0, 0, 0, 1, 0, 0, 0, 1];
+    expect(parseMessage({ ...message, attitude: { ...attitude, view } })).toEqual({ ...message, attitude: { ...attitude, view } });
+    for (const bad of [
+      { ...attitude, rollRad: Number.NaN }, { ...attitude, pitchRad: 20 }, { ...attitude, northVelocityFps: 1e6 },
+      { ...attitude, aileron: 1.5 }, { ...attitude, elevator: "0" }, { ...attitude, view: view.slice(1) },
+      { ...attitude, view: [...view.slice(1), 2] }, { rollRad: 0, pitchRad: 0, headingRad: 0 },
+    ]) expect(parseMessage({ ...message, attitude: bad })).toBeNull();
+    // The corner readings, each but airspeed optional, as the flight's own chips are.
+    const readings = { iasKt: 148, altitudeFt: -120, aoaDeg: 4.5, tints: { ias: .25, aoa: 1, vs: -.6 } };
+    // Rolling tail first reads a little below zero, and the frame still carries its attitude.
+    for (const good of [readings, { iasKt: -1 }, { iasKt: 148, tints: {} }]) {
+      expect(parseMessage({ ...message, attitude: { ...attitude, readings: good } })).toEqual({ ...message, attitude: { ...attitude, readings: good } });
+    }
+    for (const bad of [
+      {}, { iasKt: -2e5 }, { iasKt: 2e5 }, { ...readings, altitudeFt: "4250" }, { ...readings, altitudeFt: 2e7 },
+      { ...readings, aoaDeg: 200 }, { ...readings, tints: { ias: 1.5 } }, { ...readings, tints: { vs: -2 } }, { ...readings, tints: null },
+    ]) expect(parseMessage({ ...message, attitude: { ...attitude, readings: bad } }), JSON.stringify(bad)).toBeNull();
+  });
+
+  it("rounds the attitude for the wire far below what the pad shows, and keeps a frame with its view short", () => {
+    const state = {
+      rollRad: 0.123456789, pitchRad: -0.0000149, headingRad: 6.2831, northVelocityFps: 345.6789,
+      eastVelocityFps: -0.004, verticalSpeedFps: 12.345,
+    };
+    const view = Array.from({ length: 9 }, (_, index) => Math.sin(index + 0.123456789));
+    const rounded = phoneAttitude(state, { aileron: 0.98765, elevator: -0.33333 }, view);
+    expect(rounded).toMatchObject({
+      rollRad: 0.1235, pitchRad: -0, headingRad: 6.2831, northVelocityFps: 345.68, eastVelocityFps: -0,
+      verticalSpeedFps: 12.35, aileron: 0.988, elevator: -0.333,
+    });
+    expect(rounded.view).toEqual(view.map(value => Math.round(value * 1e4) / 1e4));
+    expect("view" in phoneAttitude(state, { aileron: 0, elevator: 0 }, null)).toBe(false);
+    // Readings as the pad writes them, and what is unknown left out rather than sent as null.
+    expect(phoneAttitude(state, { aileron: 0, elevator: 0 }, null, {
+      iasKt: 147.6, altitudeFt: 4250.4, aoaDeg: 4.567, tints: { ias: .333, aoa: 1.4, vs: -1.7 },
+    }).readings).toEqual({ iasKt: 148, altitudeFt: 4250, aoaDeg: 4.6, tints: { ias: .35, aoa: 1, vs: -1 } });
+    expect(phoneAttitude(state, { aileron: 0, elevator: 0 }, null, {
+      iasKt: 90, altitudeFt: null, aoaDeg: Number.NaN, tints: { ias: null, aoa: null, vs: null },
+    }).readings).toEqual({ iasKt: 90 });
+    expect("readings" in phoneAttitude(state, { aileron: 0, elevator: 0 }, null)).toBe(false);
+    const wire = JSON.stringify({ v: 1, type: "attitude", session: "x".repeat(36), epoch: 99, attitude: rounded });
+    expect(wire.length).toBeLessThan(400);
+    expect(parseMessage(wire)).not.toBeNull();
   });
 
   it("enforces UTF-8 bytes, including the exact 2 KiB boundary", () => {

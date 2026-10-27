@@ -1,4 +1,5 @@
 import { YAW_RETURN_MS_MAX, YAW_RETURN_MS_STEP, type GridPosition, type YawRelease, type YawSettings } from './phoneSettingsStore'
+import type { SliderPress } from './sliderPointer'
 import type { PhoneControllerSettings } from './protocol'
 
 type TwoFingers = PhoneControllerSettings['twoFingers']
@@ -8,11 +9,17 @@ type TwoFingers = PhoneControllerSettings['twoFingers']
  * sheet, the way Connection details does, so a settings page never competes
  * with the controls for room.
  */
-export function PhoneSettings({ gridPosition, onGridPositionChange, yaw, onYawChange, twoFingers, onTwoFingersChange }: {
+export function PhoneSettings({
+  gridPosition, onGridPositionChange, yaw, onYawChange, attitude, onAttitudeChange, sliders, onSlidersChange, twoFingers, onTwoFingersChange,
+}: {
   gridPosition: GridPosition
   onGridPositionChange(position: GridPosition): void
   yaw: YawSettings
   onYawChange(settings: YawSettings): void
+  attitude: boolean
+  onAttitudeChange(attitude: boolean): void
+  sliders: SliderPress
+  onSlidersChange(sliders: SliderPress): void
   twoFingers: TwoFingers
   onTwoFingersChange(twoFingers: TwoFingers): void
 }) {
@@ -27,6 +34,20 @@ export function PhoneSettings({ gridPosition, onGridPositionChange, yaw, onYawCh
     <label className="phone-settings__choice">
       <input type="radio" name="phone-yaw-release" value={release} checked={yaw.release === release}
         onChange={() => onYawChange({ ...yaw, release })} />
+      <span>{label}</span>
+    </label>
+  )
+  const attitudeOption = (shown: boolean, label: string) => (
+    <label className="phone-settings__choice">
+      <input type="radio" name="phone-attitude" value={shown ? 'on' : 'off'} checked={attitude === shown}
+        onChange={() => onAttitudeChange(shown)} />
+      <span>{label}</span>
+    </label>
+  )
+  const slidersOption = (press: SliderPress, label: string) => (
+    <label className="phone-settings__choice">
+      <input type="radio" name="phone-sliders" value={press} checked={sliders === press}
+        onChange={() => onSlidersChange(press)} />
       <span>{label}</span>
     </label>
   )
@@ -48,6 +69,22 @@ export function PhoneSettings({ gridPosition, onGridPositionChange, yaw, onYawCh
       <div className="phone-settings__choices">
         {option('bottom', 'Bottom')}
         {option('top', 'Top')}
+      </div>
+    </fieldset>
+    <fieldset className="phone-settings__option">
+      <legend>Pitch/roll pad</legend>
+      <p>The flight's attitude indicator under your finger, as the computer draws it, or a plain black pad with a crosshair.</p>
+      <div className="phone-settings__choices">
+        {attitudeOption(true, 'Attitude indicator')}
+        {attitudeOption(false, 'Plain')}
+      </div>
+    </fieldset>
+    <fieldset className="phone-settings__option">
+      <legend>Sliders</legend>
+      <p>A press on a slider's track: the handle jumps to your finger, or moves only when you grab it, by as much as your finger moves.</p>
+      <div className="phone-settings__choices">
+        {slidersOption('jump', 'Jump to finger')}
+        {slidersOption('grab', 'Grab the handle')}
       </div>
     </fieldset>
     <fieldset className="phone-settings__option">

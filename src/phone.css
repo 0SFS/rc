@@ -440,6 +440,26 @@ button { touch-action: manipulation; }
 .phone-stick__bottom { bottom: 7px; left: 50%; transform: translateX(-50%); }
 .phone-stick__left { left: 9px; top: 50%; transform: translateY(-50%); }
 .phone-stick__right { right: 9px; top: 50%; transform: translateY(-50%); }
+/* The flight's attitude indicator, which draws its own stick: the plain pad's
+   crosshair, ring and labels give way to it. */
+.phone-stick__instrument { position: absolute; inset: 0; display: block; pointer-events: none; }
+.phone-stick--attitude :is(.phone-stick__cross, .phone-stick__knob, .phone-stick__label, .phone-stick__top,
+  .phone-stick__bottom, .phone-stick__left, .phone-stick__right) { display: none; }
+/* The flight's readings on the instrument's corners, as its Compact layout
+   writes them: airspeed, heading and vertical speed along the top, angle of
+   attack and altitude along the bottom. A size up from the HUD's: a phone is
+   read at arm's length, in a hand that moves. */
+.phone-stick__readings { position: absolute; inset: 0; display: none; pointer-events: none; }
+.phone-stick--attitude > .phone-stick__readings { display: block; }
+.phone-stick__readings > * { position: absolute; }
+.phone-stick__readings > [hidden] { display: none; }
+.phone-stick__readings > [data-reading="ias"] { top: 0; left: 0; }
+.phone-stick__readings > [data-reading="hdg"] { top: 0; left: 50%; transform: translateX(-50%); }
+.phone-stick__readings > [data-reading="vs"] { top: 0; right: 0; }
+.phone-stick__readings > [data-reading="aoa"] { bottom: 0; left: 0; }
+.phone-stick__readings > [data-reading="alt"] { bottom: 0; right: 0; }
+.phone-stick__readings :is(.flight-hud__label, .flight-hud__unit) { font-size: 9px; }
+.phone-stick__readings .flight-hud__value { font-size: 14px; }
 
 /* ---- Sheets: a chip in the grid, a full-screen page when open. ---- */
 

@@ -50,6 +50,10 @@
       "source": "./src/pairing.ts",
       "default": "./src/pairing.ts"
     },
+    "./phoneAttitudeInstrument": {
+      "source": "./src/phoneAttitudeInstrument.ts",
+      "default": "./src/phoneAttitudeInstrument.ts"
+    },
     "./phoneCameraTrace": {
       "source": "./src/phoneCameraTrace.ts",
       "default": "./src/phoneCameraTrace.ts"

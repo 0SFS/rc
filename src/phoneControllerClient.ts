@@ -5,7 +5,7 @@ import {
   NEUTRAL_CAMERA_AIM, NEUTRAL_CONTROLS, STALE_MS, isAiming,
   isCameraAim, isCentered, isControls, neutralize, parseMessage, isProtocolVersionMismatch, PROTOCOL_MISMATCH_MESSAGE,
   isPhoneControllerSettings,
-  type ActionName, type AircraftStatus, type CameraAim, type CameraTotal, type ControlFrame, type ControlSendMode, type ControlSurfaceState, type ControlTrace, type HapticFeedbackFrame, type PhoneControllerSettings, type PhoneSettingsMessage, type RemoteMessage,
+  type ActionName, type AircraftStatus, type CameraAim, type CameraTotal, type ControlFrame, type ControlSendMode, type ControlSurfaceState, type ControlTrace, type HapticFeedbackFrame, type PhoneAttitude, type PhoneControllerSettings, type PhoneSettingsMessage, type RemoteMessage,
 } from './protocol'
 import { loadPhoneSettings, savePhoneSettings } from './phoneSettingsStore'
 
@@ -60,6 +60,13 @@ export interface PhoneControllerClient {
   readonly log: ConnectionLog
   subscribe(listener: () => void): () => void
   getSnapshot(): PhoneControllerSnapshot
+  /**
+   * The newest attitude the computer sent for the pitch/roll pad's indicator,
+   * or null before the first. Subscribe to it separately: it arrives at the
+   * computer's frame rate, and must not re-render the flight controls.
+   */
+  getAttitude(): PhoneAttitude | null
+  subscribeAttitude(listener: () => void): () => void
   updateControls(controls: Partial<ControlSurfaceState>, input?: InputTiming): void
   /** Atomic throttle/brake lever movement, enabled only by a host advertising its brake range. */
   updatePower(command: { throttle: number; brake: number }): void
@@ -83,6 +90,10 @@ export interface PhoneControllerClient {
   setViewMode(mode: 'first' | 'third'): boolean
   /** Only offered when the host advertises `gearDown`; older hosts cannot move it. */
   setGearDown(down: boolean): boolean
+  /** Only offered when the host advertises `autoFlaps`. */
+  setAutoFlaps(enabled: boolean): boolean
+  /** The trim assists. Only offered when the host advertises `autoTrim`. */
+  setAutoTrim(axis: 'pitch' | 'roll', enabled: boolean): boolean
   /**
    * Holding the throttle lever to start the engine. Carried on every control
    * frame while held, like the brake, so it ends when the phone does.
@@ -159,6 +170,8 @@ export function createPhoneControllerClient(
   const doc = options.document ?? (typeof document === 'undefined' ? undefined : document)
   const win = options.window ?? (typeof window === 'undefined' ? undefined : window)
   const listeners = new Set<() => void>()
+  const attitudeListeners = new Set<() => void>()
+  let attitude: PhoneAttitude | null = null
   const subscriptions: Array<() => void> = []
   const pending = new Map<number, { action: ActionName; epoch: number; timer: ReturnType<typeof setTimeout> }>()
   let snapshot: PhoneControllerSnapshot = {
@@ -189,6 +202,8 @@ export function createPhoneControllerClient(
   // When frames leave: chosen by the computer on its heartbeat.
   let sendMode: ControlSendMode = 'timer'
   let lastInputAt = -Infinity
+  /** The pilot touched something that no frame has carried yet: the next one says so. */
+  let inputUnsent = false
   let batchQueued = false
   let batchTimer: ReturnType<typeof setTimeout> | undefined
   // Made on first use, so a controller that never batches holds no open port.
@@ -384,8 +399,9 @@ export function createPhoneControllerClient(
       cam: aged(traceCam, time), ctl: aged(traceCtl, time), drop: traceDrop.map(tenth),
     } } : null
     const starter = starterHeld ? { starter: 1 as const } : null
-    const sent = transport.sendNative({ ...envelope(), type: 'controls', seq: sequence++, lease, controls: { ...controls }, ...gesture, ...total, ...trace, ...starter })
-    if (sent) framesSent++
+    const input = inputUnsent ? { input: 1 as const } : null
+    const sent = transport.sendNative({ ...envelope(), type: 'controls', seq: sequence++, lease, controls: { ...controls }, ...gesture, ...total, ...trace, ...starter, ...input })
+    if (sent) { framesSent++; inputUnsent = false }
     // Only a delta that left the device has been spent.
     if (sent && gesture) camera = { ...NEUTRAL_CAMERA_AIM }
     if (sent && total) { aimSent = { ...aimTotal }; aimStamp = stamp; aimMovedAt = null }
@@ -421,6 +437,7 @@ export function createPhoneControllerClient(
    */
   function inputChanged(): void {
     lastInputAt = now()
+    inputUnsent = true
     if (sendMode === 'timer') { sendControls(0); return }
     if (batchQueued) return
     batchQueued = true
@@ -517,7 +534,8 @@ export function createPhoneControllerClient(
     keepSettings(message.settings)
   }
 
-  function sendAction(action: ActionName, value?: boolean | 'first' | 'third' | 'phone' | 'computer'): boolean {
+  /** `byItself` for one the pilot did not tap for, so the computer does not take it for the pilot back at the phone. */
+  function sendAction(action: ActionName, value?: boolean | 'first' | 'third' | 'phone' | 'computer', byItself = false): boolean {
     if (finished || snapshot.phase !== 'ready' || !session || lease < 0 || !snapshot.hostFresh || pending.size >= 8) return false
     if (action === 'requestControl' && (!snapshot.canFly || !isCentered(controls))) {
       emit({ message: 'Center controls to take over.' }); return false
@@ -536,7 +554,7 @@ export function createPhoneControllerClient(
       emit({ message: 'Request timed out. Check the computer before trying again.' })
     }, HANDOFF_MS)
     pending.set(id, { action, epoch, timer })
-    if (!transport?.sendReliable({ ...envelope(), type: 'action', id, lease, action, ...(value === undefined ? {} : { value }) })) {
+    if (!transport?.sendReliable({ ...envelope(), type: 'action', id, lease, action, ...(value === undefined ? {} : { value }), ...(byItself ? {} : { input: 1 as const }) })) {
       clearAction(id)
       if (requestId === id) requestId = null
       emit({ message: 'Connection busy. Try again.' })
@@ -624,7 +642,7 @@ export function createPhoneControllerClient(
       emit({ message: message.status.paused ? 'Phone controls · Simulation paused' : 'Phone controls' })
       sendControls()
       // Losing control paused the flight; now that it is back, lift that pause.
-      if (message.resume === true && message.status.paused) sendAction('setPaused', false)
+      if (message.resume === true && message.status.paused) sendAction('setPaused', false, true)
       return
     }
     if (message.type === 'ack' && !pending.has(message.id)) return
@@ -677,6 +695,9 @@ export function createPhoneControllerClient(
         ...(followed ? { controls: { ...controls } } : {}),
       })
       askBack()
+    } else if (message.type === 'attitude') {
+      attitude = message.attitude
+      for (const listener of attitudeListeners) listener()
     } else if (message.epoch === epoch && message.type === 'ping') {
       transport?.sendNative({ ...envelope(), type: 'pong', id: message.id, sentAt: message.sentAt })
     } else if (message.epoch === epoch && message.type === 'pong' && outstandingPing?.id === message.id && message.sentAt === outstandingPing.sentAt) {
@@ -723,7 +744,7 @@ export function createPhoneControllerClient(
   function askBack(): void {
     if (finished || snapshot.status?.handBack !== 'now' || !snapshot.canFly || now() - lastAskedBackAt < ASK_BACK_INTERVAL_MS) return
     lastAskedBackAt = now()
-    sendAction('requestControl')
+    sendAction('requestControl', undefined, true)
   }
 
   doc?.addEventListener('visibilitychange', visibilityChange)
@@ -849,6 +870,8 @@ export function createPhoneControllerClient(
     log,
     subscribe(listener) { listeners.add(listener); return () => { listeners.delete(listener) } },
     getSnapshot: () => snapshot,
+    getAttitude: () => attitude,
+    subscribeAttitude(listener) { attitudeListeners.add(listener); return () => { attitudeListeners.delete(listener) } },
     updateControls,
     updatePower(command) {
       if (snapshot.status?.throttleBrakeRange !== true || !Number.isFinite(command.brake)
@@ -891,6 +914,9 @@ export function createPhoneControllerClient(
     setPaused: value => sendAction('setPaused', value),
     setViewMode: value => sendAction('setViewMode', value),
     setGearDown: value => (snapshot.status?.gearDown === undefined ? false : sendAction('setGearDown', value)),
+    setAutoFlaps: value => (snapshot.status?.autoFlaps === undefined ? false : sendAction('setAutoFlaps', value)),
+    setAutoTrim: (axis, value) => (snapshot.status?.autoTrim === undefined ? false
+      : sendAction(axis === 'pitch' ? 'setPitchAutoTrim' : 'setRollAutoTrim', value)),
     setStarterHeld(held) {
       const next = held && snapshot.canControl && !finished
       if (next === starterHeld) return
@@ -903,7 +929,7 @@ export function createPhoneControllerClient(
     updateSettings,
     destroy() {
       if (destroyed) return
-      if (!finished) { cancelTransientControls(); sendAction('releaseControl') }
+      if (!finished) { cancelTransientControls(); sendAction('releaseControl', undefined, true) }
       stopVibration()
       destroyed = true
       finished = true
@@ -913,6 +939,7 @@ export function createPhoneControllerClient(
       releaseWakeLock()
       stopTransport()
       listeners.clear()
+      attitudeListeners.clear()
     },
   }
 }

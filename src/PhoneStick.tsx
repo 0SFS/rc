@@ -1,8 +1,25 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, type KeyboardEvent, type PointerEvent } from 'react'
-import type { InputTiming } from './phoneControllerClient'
+import { useCallback, useEffect, useLayoutEffect, useRef, useSyncExternalStore, type KeyboardEvent, type PointerEvent } from 'react'
+import type { InputTiming, PhoneControllerClient } from './phoneControllerClient'
 import type { PhoneControllerSettings } from './protocol'
+import { inverseStickResponse, stickResponse, type PhoneAttitudeInstrument, type PhoneAttitudeRenderer } from './phoneAttitudeInstrument'
+import { mountPhoneAttitudeReadings, type PhoneAttitudeReadings } from './phoneAttitudeReadings'
 
-interface PhoneStickProps { label: string; horizontal?: boolean; disabled: boolean; onChange(x: number, y: number, input?: InputTiming): void }
+/** The flight's attitude indicator for the pad, and where its attitude comes from. */
+export interface PhoneStickInstrument {
+  renderer: PhoneAttitudeRenderer
+  source: Pick<PhoneControllerClient, 'getAttitude' | 'subscribeAttitude'>
+}
+
+interface PhoneStickProps {
+  label: string; horizontal?: boolean; disabled: boolean; onChange(x: number, y: number, input?: InputTiming): void
+  /**
+   * Draws the flight's attitude indicator in the pad once the computer sends
+   * an attitude, with its readings on the corners, and moves the stick as the
+   * flight's own pad does: full deflection at the instrument's edge, each axis
+   * on its own.
+   */
+  instrument?: PhoneStickInstrument
+}
 
 /** When the touch behind a change happened, for the opt-in camera trace. */
 function timing(event: PointerEvent<HTMLElement>): InputTiming {
@@ -17,23 +34,31 @@ function timing(event: PointerEvent<HTMLElement>): InputTiming {
 const TRAVEL = .36
 
 /** One captured pointer per pad; separate pads can operate simultaneously. */
-export function PhoneStick({ label, horizontal = false, disabled, onChange }: PhoneStickProps) {
+export function PhoneStick({ label, horizontal = false, disabled, onChange, instrument }: PhoneStickProps) {
   const surface = useRef<HTMLButtonElement>(null)
   const knob = useRef<HTMLSpanElement>(null)
   const pointer = useRef<number | null>(null)
   const keyboard = useRef(new Set<string>())
+  const { host: instrumentHost, readingsHost, shown: attitudeShown, setFinger } = useAttitudeInstrument(instrument)
+  const travelShare = attitudeShown && instrument ? instrument.renderer.halfShare : TRAVEL
   const radiusOf = useCallback((rect: DOMRect) =>
-    Math.max(1, Math.min(rect.width, horizontal ? rect.width : rect.height) * TRAVEL), [horizontal])
+    Math.max(1, Math.min(rect.width, horizontal ? rect.width : rect.height) * travelShare), [horizontal, travelShare])
+  // The flight's pad lets each axis reach full deflection on its own; the plain one keeps to a circle.
+  const bound = useCallback((x: number, y: number) => {
+    if (attitudeShown) return { x: Math.max(-1, Math.min(1, x)), y: Math.max(-1, Math.min(1, y)) }
+    const magnitude = Math.hypot(x, y)
+    return magnitude > 1 ? { x: x / magnitude, y: y / magnitude } : { x, y }
+  }, [attitudeShown])
   const setPosition = useCallback((x: number, y: number, radius?: number, input?: InputTiming) => {
     // Pixels, not a percentage: a percentage in `translate` resolves against
     // the knob's own 52px, so the ring crept a couple of centimetres while the
     // aircraft went to full deflection.
     const travel = radius ?? (surface.current ? radiusOf(surface.current.getBoundingClientRect()) : 0)
     if (knob.current) knob.current.style.transform = `translate(${x * travel}px, ${y * travel}px)`
-    const response = (value: number) => Math.abs(value) <= .035 ? 0 : Math.sign(value) * (Math.abs(value) - .035) / .965
-    if (input) onChange(response(x), horizontal ? 0 : response(y), input)
-    else onChange(response(x), horizontal ? 0 : response(y))
-  }, [horizontal, onChange, radiusOf])
+    setFinger(x, y, pointer.current !== null || keyboard.current.size > 0)
+    if (input) onChange(stickResponse(x), horizontal ? 0 : stickResponse(y), input)
+    else onChange(stickResponse(x), horizontal ? 0 : stickResponse(y))
+  }, [horizontal, onChange, radiusOf, setFinger])
   const cancel = useCallback(() => {
     const id = pointer.current
     pointer.current = null
@@ -62,10 +87,8 @@ export function PhoneStick({ label, horizontal = false, disabled, onChange }: Ph
     event.preventDefault()
     const rect = event.currentTarget.getBoundingClientRect()
     const radius = radiusOf(rect)
-    let x = (event.clientX - rect.left - rect.width / 2) / radius
-    let y = horizontal ? 0 : (event.clientY - rect.top - rect.height / 2) / radius
-    const magnitude = Math.hypot(x, y)
-    if (magnitude > 1) { x /= magnitude; y /= magnitude }
+    const { x, y } = bound((event.clientX - rect.left - rect.width / 2) / radius,
+      horizontal ? 0 : (event.clientY - rect.top - rect.height / 2) / radius)
     setPosition(x, y, radius, timing(event))
   }
   const key = (event: KeyboardEvent<HTMLButtonElement>, down: boolean) => {
@@ -73,13 +96,12 @@ export function PhoneStick({ label, horizontal = false, disabled, onChange }: Ph
     event.preventDefault()
     if (down) keyboard.current.add(event.key)
     else keyboard.current.delete(event.key)
-    let x = Number(keyboard.current.has('ArrowRight')) - Number(keyboard.current.has('ArrowLeft'))
-    let y = horizontal ? 0 : Number(keyboard.current.has('ArrowDown')) - Number(keyboard.current.has('ArrowUp'))
-    const magnitude = Math.hypot(x, y)
-    if (magnitude > 1) { x /= magnitude; y /= magnitude }
+    const { x, y } = bound(Number(keyboard.current.has('ArrowRight')) - Number(keyboard.current.has('ArrowLeft')),
+      horizontal ? 0 : Number(keyboard.current.has('ArrowDown')) - Number(keyboard.current.has('ArrowUp')))
     setPosition(x, y)
   }
-  return <button ref={surface} type="button" className={`phone-stick${horizontal ? ' phone-stick--rudder' : ''}`}
+  return <button ref={surface} type="button"
+    className={`phone-stick${horizontal ? ' phone-stick--rudder' : ''}${attitudeShown ? ' phone-stick--attitude' : ''}`}
     aria-label={`${label}. Drag to steer; arrow keys also work.`} disabled={disabled}
     onPointerDown={event => {
       if (pointer.current !== null || disabled || event.button !== 0) return
@@ -93,6 +115,8 @@ export function PhoneStick({ label, horizontal = false, disabled, onChange }: Ph
     onLostPointerCapture={event => { if (event.pointerId === pointer.current) cancel() }}
     onKeyDown={event => key(event, true)} onKeyUp={event => key(event, false)} onBlur={cancel}
     onContextMenu={event => event.preventDefault()}>
+    {instrument && <span className="phone-stick__instrument" ref={instrumentHost} aria-hidden="true" />}
+    {instrument && <span className="phone-stick__readings flight-hud__attitude-readings" ref={readingsHost} aria-hidden="true" />}
     <span className="phone-stick__cross" aria-hidden="true" />
     <span className="phone-stick__knob" ref={knob} aria-hidden="true" />
     <span className="phone-stick__label">{label}</span>
@@ -100,6 +124,64 @@ export function PhoneStick({ label, horizontal = false, disabled, onChange }: Ph
     <span className="phone-stick__left" aria-hidden="true">←</span><span className="phone-stick__right" aria-hidden="true">→</span>
   </button>
 }
+
+/**
+ * Mounts the flight's attitude indicator in the pad, and its readings over it,
+ * and draws them whenever an attitude arrives or the finger moves, once a
+ * frame at most. Until the first
+ * attitude the pad stays plain: a computer that sends none leaves it so. The
+ * stick it draws is the finger while one holds the pad, and otherwise where
+ * the aircraft's controls are, as the flight's own pad shows them.
+ */
+function useAttitudeInstrument(instrument: PhoneStickInstrument | undefined) {
+  const host = useRef<HTMLSpanElement>(null)
+  const readingsHost = useRef<HTMLSpanElement>(null)
+  const drawn = useRef<PhoneAttitudeInstrument | null>(null)
+  const readings = useRef<PhoneAttitudeReadings | null>(null)
+  const finger = useRef({ x: 0, y: 0, held: false })
+  const frame = useRef<number | null>(null)
+  const source = instrument?.source
+  // One render when the first attitude arrives, never one per attitude.
+  const arrived = useSyncExternalStore(source?.subscribeAttitude ?? noSubscription, () => source?.getAttitude() != null)
+  const shown = instrument !== undefined && arrived
+  const draw = useCallback(() => {
+    frame.current = null
+    const attitude = source?.getAttitude()
+    if (!attitude || !drawn.current) return
+    const { x, y, held } = finger.current
+    const rest = { x: inverseStickResponse(attitude.aileron), y: inverseStickResponse(-attitude.elevator) }
+    drawn.current.draw(attitude, held ? { x, y, active: true }
+      : { ...rest, active: Math.hypot(attitude.aileron, attitude.elevator) > .001 })
+    readings.current?.draw(attitude)
+  }, [source])
+  const schedule = useCallback(() => {
+    if (frame.current !== null) return
+    if (typeof requestAnimationFrame !== 'function') { draw(); return }
+    frame.current = requestAnimationFrame(draw)
+  }, [draw])
+  useEffect(() => {
+    if (!instrument || !shown || !host.current) return
+    drawn.current = instrument.renderer.mount(host.current)
+    if (readingsHost.current) readings.current = mountPhoneAttitudeReadings(readingsHost.current)
+    schedule()
+    const unsubscribe = instrument.source.subscribeAttitude(schedule)
+    return () => {
+      unsubscribe()
+      if (frame.current !== null && typeof cancelAnimationFrame === 'function') cancelAnimationFrame(frame.current)
+      frame.current = null
+      drawn.current?.destroy()
+      drawn.current = null
+      readings.current?.destroy()
+      readings.current = null
+    }
+  }, [instrument, shown, schedule])
+  const setFinger = useCallback((x: number, y: number, held: boolean) => {
+    finger.current = { x, y, held }
+    if (drawn.current) schedule()
+  }, [schedule])
+  return { host, readingsHost, shown, setFinger }
+}
+const noSubscription = () => () => {}
 
 export function PhoneBrake({ disabled, onChange }: { disabled: boolean; onChange(held: boolean): void }) {
   const button = useRef<HTMLButtonElement>(null)
@@ -160,7 +242,6 @@ export function PhoneBrake({ disabled, onChange }: { disabled: boolean; onChange
 const GESTURE_SCALE = 1000
 const KEY_STEP = 30 / GESTURE_SCALE
 interface CameraGesture { yaw: number; pitch: number; zoom?: number }
-
 interface PhoneCameraPadProps {
   disabled: boolean
   onGesture(gesture: CameraGesture, input?: InputTiming): void

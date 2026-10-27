@@ -2,11 +2,21 @@ import { createRoot } from 'react-dom/client'
 import { isAppPath } from './appRoute'
 import { parsePairingUrl } from './pairing'
 import { createPhoneControllerClient, type PhoneControllerClient } from './phoneControllerClient'
+import type { LoadPhoneAttitude, PhoneAttitudeRenderer } from './phoneAttitudeInstrument'
 import { PhoneController } from './PhoneController'
 import { PhoneUnpaired } from './PhoneUnpaired'
 import './phone.css'
 
-export async function createPhoneControllerApp(container: HTMLElement): Promise<{ destroy(): void }> {
+export interface PhoneControllerAppOptions {
+  /** The flight's attitude indicator for the pitch/roll pad, loaded when first wanted; without it the pad stays plain. */
+  loadAttitude?: LoadPhoneAttitude
+}
+
+export async function createPhoneControllerApp(container: HTMLElement, options: PhoneControllerAppOptions = {}): Promise<{ destroy(): void }> {
+  // Loaded once for the page, however many QRs it scans.
+  let attitude: Promise<PhoneAttitudeRenderer> | null = null
+  const load = options.loadAttitude
+  const loadAttitude = load && (() => attitude ??= load().catch((error: unknown) => { attitude = null; throw error }))
   const consumeInvitation = () => {
     const invitation = parsePairingUrl(window.location.href)
     const cleanUrl = new URL(window.location.href)
@@ -46,7 +56,7 @@ export async function createPhoneControllerApp(container: HTMLElement): Promise<
       next.secret = ''
     }
     // Reset touch component state when the same browser tab scans another QR.
-    root.render(<PhoneController key={++generation} client={client} onPair={pair} />)
+    root.render(<PhoneController key={++generation} client={client} onPair={pair} loadAttitude={loadAttitude} />)
   }
   const onHashChange = () => {
     // replaceState does not emit hashchange. Ignore empty/stale queued events

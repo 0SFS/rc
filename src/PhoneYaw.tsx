@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useRef } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useRef } from 'react'
 import type { YawSettings } from './phoneSettingsStore'
 import { PhoneControlRange } from './PhoneControlRange'
+import type { SliderPress } from './sliderPointer'
 
 /**
  * The desktop HUD's yaw slider, plus what happens when the finger leaves it.
@@ -12,16 +13,19 @@ import { PhoneControlRange } from './PhoneControlRange'
  * knows about. Each step of it goes out as an ordinary rudder update, so the
  * aircraft sees the sweep the pilot sees.
  */
-export function PhoneYaw({ value, actual, disabled, settings, onChange }: {
+export function PhoneYaw({ value, actual, disabled, settings, press, onChange }: {
   value: number
   actual?: number
   disabled: boolean
   settings: YawSettings
+  /** Settings → Sliders. */
+  press: SliderPress
   onChange(rudder: number): void
 }) {
-  const track = useRef<HTMLInputElement>(null)
   const frame = useRef<number | null>(null)
-  const activePointer = useRef<number | null>(null)
+  // What the finger last set, which a release can arrive before React has drawn.
+  const commanded = useRef(value)
+  useLayoutEffect(() => { commanded.current = value }, [value])
   const { release, returnMs } = settings
   const stop = useCallback(() => {
     if (frame.current === null) return
@@ -29,10 +33,10 @@ export function PhoneYaw({ value, actual, disabled, settings, onChange }: {
     frame.current = null
   }, [])
   const settle = useCallback(() => {
-    // `lostpointercapture` arrives right behind `pointerup`, and a blur behind
-    // both: a return already in flight finishes rather than starting over.
+    // A blur can arrive behind the release: a return already in flight
+    // finishes rather than starting over.
     if (frame.current !== null) return
-    const from = Number(track.current?.value ?? 0)
+    const from = commanded.current
     if (release === 'hold' || !Number.isFinite(from) || from === 0) return
     if (returnMs <= 0) { onChange(0); return }
     const started = performance.now()
@@ -45,35 +49,9 @@ export function PhoneYaw({ value, actual, disabled, settings, onChange }: {
     }
     frame.current = requestAnimationFrame(step)
   }, [onChange, release, returnMs])
-  const finishPointer = useCallback((pointerId: number) => {
-    if (activePointer.current !== pointerId) return
-    activePointer.current = null
-    settle()
-  }, [settle])
-  // A native range need not deliver a release outside its own box. Capture
-  // where supported, and keep a matching window fallback for cancellation or
-  // browsers that transfer capture to the range's internal thumb.
-  useEffect(() => {
-    const host = track.current?.ownerDocument.defaultView
-    if (!host) return
-    const finish = (event: PointerEvent) => finishPointer(event.pointerId)
-    const blur = () => {
-      if (activePointer.current === null) return
-      activePointer.current = null
-      settle()
-    }
-    host.addEventListener('pointerup', finish)
-    host.addEventListener('pointercancel', finish)
-    host.addEventListener('blur', blur)
-    return () => {
-      host.removeEventListener('pointerup', finish)
-      host.removeEventListener('pointercancel', finish)
-      host.removeEventListener('blur', blur)
-    }
-  }, [finishPointer, settle])
   // Losing control mid-return leaves nothing to return: the client has already
   // centred every transient control itself.
-  useEffect(() => { if (disabled) { activePointer.current = null; stop() } }, [disabled, stop])
+  useEffect(() => { if (disabled) stop() }, [disabled, stop])
   // Choosing the return back in Settings applies to a rudder parked off centre
   // right now, rather than only to the next finger. Never on mount: nothing has
   // been released yet, and a fresh client's rudder is centred already.
@@ -86,17 +64,10 @@ export function PhoneYaw({ value, actual, disabled, settings, onChange }: {
   useEffect(() => stop, [stop])
   return <label className="flight-hud__yaw-control phone-yaw">
     <span className="flight-hud__yaw-heading"><span>YAW</span><output>{`${Math.round(value * 100)}%`}</output></span>
-    <PhoneControlRange inputRef={track} orientation="horizontal" actual={actual} min="-1" max="1" step=".01" value={value} disabled={disabled}
+    {/* The slider says when the finger lifts, whatever the browser does with
+        a drag: a native range's own release can go missing on a phone. */}
+    <PhoneControlRange orientation="horizontal" actual={actual} min="-1" max="1" step=".01" value={value} disabled={disabled}
       aria-label={release === 'center' ? 'Yaw rudder. Releases to centre.' : 'Yaw rudder. Holds where you leave it.'}
-      onPointerDown={event => {
-        if (disabled || (activePointer.current !== null && activePointer.current !== event.pointerId)) return
-        stop()
-        activePointer.current = event.pointerId
-        try { event.currentTarget.setPointerCapture(event.pointerId) } catch { /* window release remains available */ }
-      }}
-      onChange={event => { stop(); onChange(Number(event.target.value)) }}
-      onPointerUp={event => finishPointer(event.pointerId)} onPointerCancel={event => finishPointer(event.pointerId)}
-      onLostPointerCapture={event => finishPointer(event.pointerId)}
-      onBlur={() => { activePointer.current = null; settle() }} />
+      press={press} onPress={stop} onValue={next => { stop(); commanded.current = next; onChange(next) }} onRelease={settle} onBlur={settle} />
   </label>
 }

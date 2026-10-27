@@ -1,6 +1,6 @@
 /**
  * The phone controller's own settings — its chip grid, its yaw slider, its
- * haptics, its camera pad — kept here with the flight's other settings, in Remote Control →
+ * haptics, its attitude indicator, its sliders, its camera pad — kept here with the flight's other settings, in Remote Control →
  * Phone controller, so one export or preset holds the whole setup. The phone
  * changes them from its ⚙ sheet and Haptics chip over the link, and keeps a
  * copy for when it is not paired. Spec: `docs/phone-controller.md` → *The
@@ -19,6 +19,8 @@ const PARAMETER_IDS = {
   yawRelease: "osfs.phone.yawRelease",
   yawReturnMs: "osfs.phone.yawReturnMs",
   haptics: "osfs.phone.haptics",
+  attitude: "osfs.phone.attitude",
+  sliders: "osfs.phone.sliders",
   twoFingers: "osfs.phone.twoFingers",
 } as const satisfies Record<keyof PhoneControllerSettings, RemoteControlParameterId>;
 
@@ -30,6 +32,8 @@ export function readPhoneControllerSettings(parameters: RemoteControlParameters)
     yawRelease: parameters.get(PARAMETER_IDS.yawRelease),
     yawReturnMs: parameters.get(PARAMETER_IDS.yawReturnMs),
     haptics: parameters.get(PARAMETER_IDS.haptics),
+    attitude: parameters.get(PARAMETER_IDS.attitude),
+    sliders: parameters.get(PARAMETER_IDS.sliders),
     twoFingers: parameters.get(PARAMETER_IDS.twoFingers),
   };
 }
@@ -41,6 +45,8 @@ export function phoneControllerSettingsValues(settings: PhoneControllerSettings)
     [PARAMETER_IDS.yawRelease]: settings.yawRelease,
     [PARAMETER_IDS.yawReturnMs]: settings.yawReturnMs,
     [PARAMETER_IDS.haptics]: settings.haptics,
+    [PARAMETER_IDS.attitude]: settings.attitude,
+    [PARAMETER_IDS.sliders]: settings.sliders,
     [PARAMETER_IDS.twoFingers]: settings.twoFingers,
   };
 }
