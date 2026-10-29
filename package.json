@@ -30,6 +30,10 @@
       "source": "./src/createPhoneControllerApp.tsx",
       "default": "./src/createPhoneControllerApp.tsx"
     },
+    "./drone/droneProtocol": {
+      "source": "./src/drone/droneProtocol.ts",
+      "default": "./src/drone/droneProtocol.ts"
+    },
     "./createPhoneControlSession": {
       "source": "./src/createPhoneControlSession.ts",
       "default": "./src/createPhoneControlSession.ts"

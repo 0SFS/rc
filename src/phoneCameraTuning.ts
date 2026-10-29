@@ -38,13 +38,8 @@ export interface PhoneCameraTuning {
   catchUp: number;
   /** Playout only: how far past the newest touch to extrapolate. 0 never guesses. */
   predictMs: number;
-  /**
-   * Which of the aircraft's rotations the chase camera turns with. `attitude`:
-   * all of them (the original). `no-roll`: pitch and heading, wings level.
-   * `heading`: heading only, horizon level. Affects every chase view, not only
-   * the phone's.
-   */
-  chaseFrame: "attitude" | "no-roll" | "heading";
+  /** Chase frame: body rotation, direction of travel, or the local planet frame. */
+  chaseFrame: "aircraft" | "momentum" | "planet";
 }
 
 /** The osfs.camera.* parameters the tuning is kept in, by field. */
@@ -99,6 +94,12 @@ function within(field: "bufferMs" | "catchUp" | "predictMs", value: unknown): nu
   return value >= bounds.min && value <= bounds.max ? value : DEFAULT_PHONE_CAMERA_TUNING[field];
 }
 
+export function normalizeCameraFollow(value: unknown): PhoneCameraTuning["chaseFrame"] {
+  if (value === "attitude") return "aircraft";
+  if (value === "no-roll" || value === "heading") return "momentum";
+  return oneOf(value, ["aircraft", "momentum", "planet"] as const, "aircraft");
+}
+
 export function normalizePhoneCameraTuning(partial: Partial<PhoneCameraTuning> | null | undefined): PhoneCameraTuning {
   const base = DEFAULT_PHONE_CAMERA_TUNING;
   return {
@@ -108,7 +109,7 @@ export function normalizePhoneCameraTuning(partial: Partial<PhoneCameraTuning> |
     bufferMs: within("bufferMs", partial?.bufferMs),
     catchUp: within("catchUp", partial?.catchUp),
     predictMs: within("predictMs", partial?.predictMs),
-    chaseFrame: oneOf(partial?.chaseFrame, ["attitude", "no-roll", "heading"] as const, base.chaseFrame),
+    chaseFrame: normalizeCameraFollow(partial?.chaseFrame),
   };
 }
 

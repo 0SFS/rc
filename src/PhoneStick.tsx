@@ -18,6 +18,7 @@ interface PhoneStickProps {
    * flight's own pad does: full deflection at the instrument's edge, each axis
    * on its own.
    */
+  verticalLabels?: { up: string; down: string }
   instrument?: PhoneStickInstrument
 }
 
@@ -34,7 +35,7 @@ function timing(event: PointerEvent<HTMLElement>): InputTiming {
 const TRAVEL = .36
 
 /** One captured pointer per pad; separate pads can operate simultaneously. */
-export function PhoneStick({ label, horizontal = false, disabled, onChange, instrument }: PhoneStickProps) {
+export function PhoneStick({ label, horizontal = false, disabled, onChange, instrument, verticalLabels }: PhoneStickProps) {
   const surface = useRef<HTMLButtonElement>(null)
   const knob = useRef<HTMLSpanElement>(null)
   const pointer = useRef<number | null>(null)
@@ -120,7 +121,7 @@ export function PhoneStick({ label, horizontal = false, disabled, onChange, inst
     <span className="phone-stick__cross" aria-hidden="true" />
     <span className="phone-stick__knob" ref={knob} aria-hidden="true" />
     <span className="phone-stick__label">{label}</span>
-    {!horizontal && <><span className="phone-stick__top">NOSE DOWN</span><span className="phone-stick__bottom">NOSE UP</span></>}
+    {!horizontal && <><span className="phone-stick__top">{verticalLabels?.up ?? "NOSE DOWN"}</span><span className="phone-stick__bottom">{verticalLabels?.down ?? "NOSE UP"}</span></>}
     <span className="phone-stick__left" aria-hidden="true">←</span><span className="phone-stick__right" aria-hidden="true">→</span>
   </button>
 }

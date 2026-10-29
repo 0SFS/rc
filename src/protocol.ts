@@ -120,8 +120,88 @@ export interface AircraftStatus {
    * keeps its levers where it put them.
    */
   blend?: "phone" | "computer";
+  /** Present only while the computer is flying an installed quadcopter. */
+  drone?: DroneAvailability | DroneTelemetry;
 }
 export type HandBack = "now" | "idle";
+
+export interface DroneAvailability { available: true }
+
+export type DroneCapturePhase = "idle" | "slewing" | "optical-flow-fine-align" | "settling-zero-velocity" | "capturing" | "next-node" | "zip-export" | "done" | "aborted";
+
+export interface DroneTelemetry {
+  available: true;
+  droneId: "dji-mini-2" | "dji-air-2s";
+  yawAngleDeg: number;
+  gimbalPitchDeg: number;
+  gimbalRollDeg: number;
+  isSettled: boolean;
+  isCapturing: boolean;
+  capturePhase: DroneCapturePhase;
+  nodeIndex: number;
+  nodeCount: number;
+  flowConfidence: number;
+  flowSource: "visual" | "imu";
+  omegaVisualRadPerSec: number;
+}
+
+export interface DroneCommand {
+  droneId: "dji-mini-2" | "dji-air-2s";
+  pitch: number;
+  roll: number;
+  vertical: number;
+  yaw: number;
+  yawMode: "angularVelocity" | "angle";
+  yawAngleDeg?: number;
+  gimbalPitchDeg: number;
+  sport?: boolean;
+  shutter?: 1;
+  capture360?: boolean;
+}
+
+const DRONE_PHASES: readonly DroneCapturePhase[] = ["idle", "slewing", "optical-flow-fine-align", "settling-zero-velocity", "capturing", "next-node", "zip-export", "done", "aborted"];
+const DRONE_TELEMETRY_KEYS = ["available", "droneId", "yawAngleDeg", "gimbalPitchDeg", "gimbalRollDeg", "isSettled", "isCapturing", "capturePhase", "nodeIndex", "nodeCount", "flowConfidence", "flowSource", "omegaVisualRadPerSec"] as const;
+
+function inRange(value: unknown, min: number, max: number): value is number {
+  return finite(value) && value >= min && value <= max;
+}
+
+function isDroneId(value: unknown): value is DroneTelemetry["droneId"] {
+  return value === "dji-mini-2" || value === "dji-air-2s";
+}
+
+function isDroneAvailability(value: unknown): value is DroneAvailability {
+  return record(value) && value.available === true && Object.keys(value).length === 1;
+}
+
+function isDroneTelemetry(value: unknown): value is DroneTelemetry {
+  if (!record(value)) return false;
+  const keys = Object.keys(value);
+  if (keys.length !== DRONE_TELEMETRY_KEYS.length || DRONE_TELEMETRY_KEYS.some(key => !keys.includes(key))) return false;
+  return value.available === true && isDroneId(value.droneId)
+    && inRange(value.yawAngleDeg, -180, 180) && inRange(value.gimbalPitchDeg, -90, 24) && inRange(value.gimbalRollDeg, -180, 180)
+    && typeof value.isSettled === "boolean" && typeof value.isCapturing === "boolean"
+    && DRONE_PHASES.includes(value.capturePhase as DroneCapturePhase)
+    && Number.isInteger(value.nodeIndex) && inRange(value.nodeIndex, 0, 256)
+    && Number.isInteger(value.nodeCount) && inRange(value.nodeCount, 0, 256)
+    && inRange(value.flowConfidence, 0, 1)
+    && (value.flowSource === "visual" || value.flowSource === "imu")
+    && inRange(value.omegaVisualRadPerSec, -50, 50);
+}
+
+function isDroneCommand(value: unknown): value is DroneCommand {
+  if (!record(value)) return false;
+  const allowed = ["droneId", "pitch", "roll", "vertical", "yaw", "yawMode", "yawAngleDeg", "gimbalPitchDeg", "sport", "shutter", "capture360"];
+  if (Object.keys(value).some(key => !allowed.includes(key))) return false;
+  return isDroneId(value.droneId)
+    && inRange(value.pitch, -1, 1) && inRange(value.roll, -1, 1) && inRange(value.vertical, -1, 1) && inRange(value.yaw, -1, 1)
+    && (value.yawMode === "angularVelocity" || value.yawMode === "angle")
+    && (value.yawAngleDeg === undefined || inRange(value.yawAngleDeg, -180, 180))
+    && inRange(value.gimbalPitchDeg, -90, 24)
+    && (value.sport === undefined || typeof value.sport === "boolean")
+    && (value.shutter === undefined || value.shutter === 1)
+    && (value.capture360 === undefined || typeof value.capture360 === "boolean");
+}
 /**
  * What the camera trackpad did since the last frame, not where it is: `yaw` and
  * `pitch` are the swipe as a fraction of the pad, and `zoom` is the ratio a
@@ -425,6 +505,7 @@ export interface HapticFeedbackFrame { v: 1; id: number; pulseMs: number; ttlMs:
 export type ControlFrame = Envelope & {
   type: "controls"; seq: number; lease: number; controls: ControlSurfaceState; camera?: CameraAim; aim?: CameraTotal; trace?: ControlTrace;
   starter?: 1; input?: 1;
+  drone?: DroneCommand;
 };
 export type RemoteMessage =
   | { v: 1; type: "hello"; secret: string }
@@ -534,6 +615,7 @@ function status(value: unknown): value is AircraftStatus {
     && (value.keepSliderBrakes === undefined || typeof value.keepSliderBrakes === "boolean")
     && (value.afterburnerDetent === undefined || (finite(value.afterburnerDetent) && value.afterburnerDetent >= 0 && value.afterburnerDetent <= 1))
     && (value.engine === undefined || isEngineStatus(value.engine));
+  if (valid && value.drone !== undefined && !isDroneAvailability(value.drone) && !isDroneTelemetry(value.drone)) delete value.drone;
   // An offer, never authority: a malformed one is dropped on its own, and the
   // phone then simply waits to be asked, as it would from an older computer.
   if (valid && value.handBack !== undefined && value.handBack !== "now" && value.handBack !== "idle") delete value.handBack;
@@ -592,6 +674,7 @@ export function parseMessage(input: unknown): RemoteMessage | null {
       if (valid && value.trace !== undefined && !isControlTrace(value.trace)) delete value.trace;
       if (valid && value.starter !== undefined && value.starter !== 1) delete value.starter;
       if (valid && value.input !== undefined && value.input !== 1) delete value.input;
+      if (valid && value.drone !== undefined && !isDroneCommand(value.drone)) delete value.drone;
       break;
     case "heartbeat": valid = isCounter(value.lease) && (value.status === undefined || status(value.status))
       && (value.appliedSeq === undefined || isCounter(value.appliedSeq))

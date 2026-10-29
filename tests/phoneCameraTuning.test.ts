@@ -12,10 +12,10 @@ const ORIGINAL: PhoneCameraTuning = { ...DEFAULT_PHONE_CAMERA_TUNING, send: "tim
 
 describe("phone camera tuning", () => {
   it("defaults to smooth, paced drawing and keeps only valid values", () => {
-    expect(DEFAULT_PHONE_CAMERA_TUNING).toEqual({ ...RECOMMENDED, bufferMs: 12, catchUp: 2, predictMs: 0, chaseFrame: "attitude" });
+    expect(DEFAULT_PHONE_CAMERA_TUNING).toEqual({ ...RECOMMENDED, bufferMs: 12, catchUp: 2, predictMs: 0, chaseFrame: "aircraft" });
     expect(normalizePhoneCameraTuning(null)).toEqual(DEFAULT_PHONE_CAMERA_TUNING);
     expect(normalizePhoneCameraTuning({ send: "sometimes", bufferMs: 13, catchUp: 2, predictMs: 160, chaseFrame: "heading" } as never))
-      .toEqual({ ...DEFAULT_PHONE_CAMERA_TUNING, bufferMs: 13, chaseFrame: "heading" });
+      .toEqual({ ...DEFAULT_PHONE_CAMERA_TUNING, bufferMs: 13, chaseFrame: "momentum" });
   });
 
   it("lives in the osfs.camera parameters, with a catch-up of 0 kept as Jump", () => {
@@ -27,13 +27,13 @@ describe("phone camera tuning", () => {
 
   it("migrates the old record once, and ignores a corrupt one", () => {
     expect(migratePhoneCameraTuning(JSON.stringify({ ...RECOMMENDED, chaseFrame: "no-roll" })))
-      .toMatchObject({ "osfs.camera.phone.send": "batch", "osfs.camera.phone.bufferMs": 12, "osfs.camera.chaseFrame": "no-roll" });
+      .toMatchObject({ "osfs.camera.phone.send": "batch", "osfs.camera.phone.bufferMs": 12, "osfs.camera.chaseFrame": "momentum" });
     expect(migratePhoneCameraTuning("{not json")).toBeNull();
   });
 
   it("names a combination so a trace can be split by it", () => {
-    expect(describePhoneCameraTuning(ORIGINAL)).toBe("timer · delta · arrival · attitude");
+    expect(describePhoneCameraTuning(ORIGINAL)).toBe("timer · delta · arrival · aircraft");
     expect(describePhoneCameraTuning({ ...RECOMMENDED, catchUp: 0, predictMs: 8 }))
-      .toBe("batch · total · playout 12ms jump predict8 · attitude");
+      .toBe("batch · total · playout 12ms jump predict8 · aircraft");
   });
 });

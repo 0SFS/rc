@@ -9,7 +9,7 @@ import {
   HANDOFF_MS, HAPTIC_FEEDBACK_TTL_MS, HAPTIC_FEEDBACK_VERSION, HEARTBEAT_MS, MAX_HAPTIC_PULSE_MS, PHONE_CONNECTION_LOSS_MS, STALE_MS,
   PROTOCOL_MISMATCH_MESSAGE, isCentered, isProtocolVersionMismatch, neutralize, parseMessage,
   type ActionMessage, type AircraftStatus, type CameraAim, type ControlFrame, type ControlSurfaceState,
-  type HandBack, type HapticFeedbackFrame, type PhoneAttitude, type PhoneControllerSettings, type PhoneSettingsMessage, type RemoteMessage,
+  type DroneCommand, type HandBack, type HapticFeedbackFrame, type PhoneAttitude, type PhoneControllerSettings, type PhoneSettingsMessage, type RemoteMessage,
 } from "./protocol";
 
 export interface PhoneSessionSnapshot {
@@ -107,6 +107,9 @@ const BUSY_GAP_MS = 2 * HEARTBEAT_MS;
 export const PHONE_QUIET_MS = 2500;
 /** The fastest the phone's attitude indicator is sent: 60 a second, with a millisecond's grace for a 60 Hz display's jitter. */
 const ATTITUDE_INTERVAL_MS = 1000 / 60 - 1;
+/** Leave room below the transport limit for essential flight and capture status. */
+const HEARTBEAT_STATUS_BUDGET_BYTES = 1800;
+const heartbeatEncoder = new TextEncoder();
 const seconds = (ms: number) => `${(ms / 1000).toFixed(1)} s`;
 
 /** The desktop, not PeerJS Cloud, authenticates the invitation and owns flight authority. */
@@ -274,8 +277,9 @@ export function createPhoneControlSession(options: PhoneControlSessionOptions) {
    * advance physics.
    */
   const aim = createPhoneCameraReceiver(tuning);
+  let droneCommand: DroneCommand | null = null;
   const newEpoch = () => {
-    epoch += 1; latest = null; quietSince = null; lastSeq = -1; leases.clear(); actions.clear(); pending = null; pendingStatus = null; feedback = null; aim.reset();
+    epoch += 1; latest = null; droneCommand = null; quietSince = null; lastSeq = -1; leases.clear(); actions.clear(); pending = null; pendingStatus = null; feedback = null; aim.reset();
     maxActionId = -1; lastAppliedSeq = undefined; receiveToApplyMs = undefined; frameTimes.length = 0;
   };
   const issueLease = () => {
@@ -450,6 +454,7 @@ export function createPhoneControlSession(options: PhoneControlSessionOptions) {
     frameTimes.push(receivedAt);
     lastSeq = message.seq;
     latest = { frame: message, receivedAt, heardAt: listening() };
+    droneCommand = message.drone ?? null;
     if (snapshot.owner === "phone" && aim.receive(message, receivedAt)) options.onCameraAim?.();
     if (message.input === 1) options.onPhoneInput?.();
     if (pending) { pending.frame = message; maybeGrant(); }
@@ -640,13 +645,20 @@ export function createPhoneControlSession(options: PhoneControlSessionOptions) {
     if (attitude) sendAttitude();
     const lease = issueLease();
     ticks += 1;
-    active.sendNative({ ...envelope(), type: "heartbeat", lease,
+    const heartbeat: Extract<RemoteMessage, { type: "heartbeat" }> = { ...envelope(), type: "heartbeat", lease,
       ...(ticks % 2 === 0 ? { status: status(), appliedSeq: lastAppliedSeq, receiveToApplyMs } : {}),
       ...takeFeedback(),
       ...(options.trace ? { trace: 1 as const } : {}),
       // Absent means the original timing, which is all an older phone knows.
       ...(tuning().send === "batch" ? { controlSend: "batch" as const } : {}),
-    }, true);
+    };
+    if (heartbeat.status?.engine?.orbs !== undefined
+      && heartbeatEncoder.encode(JSON.stringify(heartbeat)).byteLength > HEARTBEAT_STATUS_BUDGET_BYTES) {
+      const engine = { ...heartbeat.status.engine };
+      delete engine.orbs;
+      heartbeat.status = { ...heartbeat.status, engine };
+    }
+    active.sendNative(heartbeat, true);
   }, HEARTBEAT_MS);
 
   return {
@@ -715,6 +727,7 @@ export function createPhoneControlSession(options: PhoneControlSessionOptions) {
      * a start rides out a stall; past that the starter lets go with the phone.
      */
     isStarterHeld: () => snapshot.owner === "phone" && holding() && latest!.frame.starter === 1,
+    getDroneCommand: () => snapshot.owner === "phone" ? droneCommand : null,
     /** The phone flies together with this computer, whose own controls stay live. */
     isBlending: blending,
     /** The gesture movement to draw this frame, if any is owed. */

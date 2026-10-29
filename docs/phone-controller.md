@@ -3,6 +3,9 @@
 Use your phone as a physical-feeling control yoke while the simulator runs on your computer. No app
 to install and nothing to configure — both ends are just web pages.
 
+Quadcopter controls appear only after the computer is flying a drone from the installed mod. Until
+then the phone keeps the fixed-wing yoke, and it does not download the quadcopter screen.
+
 ## Pairing
 
 1. On the computer, open [flight mode](https://0sfs.github.io/fly/), then ⚙ → **Remote Control**.
@@ -220,6 +223,8 @@ The phone route loads independently of the globe renderer and JSBSim, so it stay
 mobile data.
 
 ## The screen itself
+
+The chase frame is selected on the computer in Aircraft → Camera → **Camera follows**: Aircraft follows body attitude; Momentum follows travel heading and climb/descent angle without roll and stays steady at hover; Planet remains level and north-oriented. Aircraft data selects the default, with planes using Aircraft and quadcopters using Momentum. Phone swipes and pinches keep working in all three modes.
 
 The phone flies the aircraft, moves the chase camera from a trackpad — swipe to look, pinch to zoom —
 and shows the desktop HUD's own engine widget, drawn by the same code from the same reading, just

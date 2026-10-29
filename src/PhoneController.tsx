@@ -1,4 +1,5 @@
-import { useCallback, useEffect, useMemo, useState, useSyncExternalStore } from "react";
+import { useCallback, useEffect, useMemo, useState, useSyncExternalStore, type ReactElement } from "react";
+import { loadQuadcopter } from "./drone/loadQuadcopter";
 import type { InputTiming, PhoneControllerClient } from "./phoneControllerClient";
 import type { LoadPhoneAttitude, PhoneAttitudeRenderer } from "./phoneAttitudeInstrument";
 import { PhoneBrake, PhoneCameraPad, PhoneStick, type PhoneStickInstrument } from "./PhoneStick";
@@ -35,7 +36,14 @@ export function PhoneController({ client, onPair, loadAttitude }: {
 }) {
   const state = useSyncExternalStore(client.subscribe, client.getSnapshot);
   const [scanning, setScanning] = useState(false);
+  const [quad, setQuad] = useState<((props: { client: PhoneControllerClient; locked: boolean; sliders: SliderPress }) => ReactElement) | null>(null);
   const status = state.status;
+  useEffect(() => {
+    if (status?.drone?.available !== true || quad) return;
+    let live = true;
+    void loadQuadcopter().then(loaded => { if (live) setQuad(() => loaded.default); });
+    return () => { live = false; };
+  }, [status?.drone?.available, quad]);
   const fullscreen = useFullscreenOffer();
   // The computer keeps these with its own settings; the client keeps this phone's copy.
   const { grid: gridPosition, yawRelease, yawReturnMs, attitude, sliders, twoFingers } = state.settings;
@@ -109,7 +117,8 @@ export function PhoneController({ client, onPair, loadAttitude }: {
   return <main className="phone-app">
     <PhoneFullscreenPrompt offer={fullscreen} />
     {scanning && onPair && <PhoneQrScanner onScan={onPair} onClose={() => setScanning(false)} />}
-    <section className={`phone-controls phone-controls--grid-${gridPosition}`} aria-label="Aircraft controls">
+    {status?.drone?.available === true && quad ? quad({ client, locked, sliders }) : null}
+    {status?.drone?.available === true && quad ? null : <section className={`phone-controls phone-controls--grid-${gridPosition}`} aria-label="Aircraft controls">
       <div className="phone-cluster" aria-label="Attitude, trim and flaps">
         {autoTrim ? <div className="flight-hud__auto-trims" role="group" aria-label="Trim assists">
           {autoTrimButton("roll")}
@@ -225,7 +234,7 @@ export function PhoneController({ client, onPair, loadAttitude }: {
         {/* Last in the grid. A chip like the rest, held rather than tapped. */}
         <PhoneBrake disabled={locked} onChange={brake} />
       </div>
-    </section>
+    </section>}
   </main>;
 }
 

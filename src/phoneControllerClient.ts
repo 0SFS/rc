@@ -5,7 +5,7 @@ import {
   NEUTRAL_CAMERA_AIM, NEUTRAL_CONTROLS, STALE_MS, isAiming,
   isCameraAim, isCentered, isControls, neutralize, parseMessage, isProtocolVersionMismatch, PROTOCOL_MISMATCH_MESSAGE,
   isPhoneControllerSettings,
-  type ActionName, type AircraftStatus, type CameraAim, type CameraTotal, type ControlFrame, type ControlSendMode, type ControlSurfaceState, type ControlTrace, type HapticFeedbackFrame, type PhoneAttitude, type PhoneControllerSettings, type PhoneSettingsMessage, type RemoteMessage,
+  type ActionName, type AircraftStatus, type CameraAim, type CameraTotal, type ControlFrame, type ControlSendMode, type ControlSurfaceState, type ControlTrace, type DroneCommand, type HapticFeedbackFrame, type PhoneAttitude, type PhoneControllerSettings, type PhoneSettingsMessage, type RemoteMessage,
 } from './protocol'
 import { loadPhoneSettings, savePhoneSettings } from './phoneSettingsStore'
 
@@ -68,6 +68,8 @@ export interface PhoneControllerClient {
   getAttitude(): PhoneAttitude | null
   subscribeAttitude(listener: () => void): () => void
   updateControls(controls: Partial<ControlSurfaceState>, input?: InputTiming): void
+  /** Quadcopter command for the next control frames. `shutter: 1` is sent once. */
+  setDrone(command: DroneCommand | null): void
   /** Atomic throttle/brake lever movement, enabled only by a host advertising its brake range. */
   updatePower(command: { throttle: number; brake: number }): void
   /**
@@ -182,6 +184,7 @@ export function createPhoneControllerClient(
     hapticsSupported: false, hapticsEnabled: false, settings: loadPhoneSettings(null),
   }
   let controls = { ...NEUTRAL_CONTROLS }
+  let droneCommand: DroneCommand | null = null
   let leverBrake = 0
   let transientBrake = 0
   // Held like the brake, but not a flight surface, so it travels beside them.
@@ -399,13 +402,15 @@ export function createPhoneControllerClient(
       cam: aged(traceCam, time), ctl: aged(traceCtl, time), drop: traceDrop.map(tenth),
     } } : null
     const starter = starterHeld ? { starter: 1 as const } : null
+    const droneField = droneCommand ? { drone: droneCommand } : null
     const input = inputUnsent ? { input: 1 as const } : null
-    const sent = transport.sendNative({ ...envelope(), type: 'controls', seq: sequence++, lease, controls: { ...controls }, ...gesture, ...total, ...trace, ...starter, ...input })
+    const sent = transport.sendNative({ ...envelope(), type: 'controls', seq: sequence++, lease, controls: { ...controls }, ...gesture, ...total, ...trace, ...starter, ...input, ...droneField })
     if (sent) { framesSent++; inputUnsent = false }
     // Only a delta that left the device has been spent.
     if (sent && gesture) camera = { ...NEUTRAL_CAMERA_AIM }
     if (sent && total) { aimSent = { ...aimTotal }; aimStamp = stamp; aimMovedAt = null }
     if (sent && trace) { traceCam = []; traceCtl = []; traceGated = 0; traceDrop = [0, 0, 0] }
+    if (sent && droneCommand?.shutter === 1) droneCommand = { ...droneCommand, shutter: undefined }
     if (sent && suspended) lettingGo--
   }
 
@@ -873,6 +878,7 @@ export function createPhoneControllerClient(
     getAttitude: () => attitude,
     subscribeAttitude(listener) { attitudeListeners.add(listener); return () => { attitudeListeners.delete(listener) } },
     updateControls,
+    setDrone(command) { droneCommand = command; inputChanged() },
     updatePower(command) {
       if (snapshot.status?.throttleBrakeRange !== true || !Number.isFinite(command.brake)
         || command.brake < 0 || command.brake > 1 || (command.throttle > 0 && command.brake > 0)) return

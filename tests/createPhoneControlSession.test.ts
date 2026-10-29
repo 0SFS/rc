@@ -4,7 +4,7 @@ import { DEFAULT_PHONE_CAMERA_TUNING } from '../src/phoneCameraTuning'
 import { DEFAULT_PHONE_CONTROLLER_SETTINGS } from '../src/phoneControllerSettings'
 import { DEFAULT_CONTROL_SHARING, type ControlSharing } from '../src/controlSharing'
 import { parsePairingUrl } from '../src/pairing'
-import { PROTOCOL_MISMATCH_MESSAGE, type AircraftStatus, type ControlSurfaceState, type PhoneControllerSettings, type RemoteMessage } from '../src/protocol'
+import { PROTOCOL_MISMATCH_MESSAGE, MAX_MESSAGE_BYTES, parseMessage, type AircraftStatus, type ControlSurfaceState, type PhoneControllerSettings, type RemoteMessage } from '../src/protocol'
 import type { createPeerEndpoint, SessionTransport } from '../src/peerTransport'
 
 function deferred<T>() {
@@ -126,6 +126,54 @@ beforeEach(() => vi.useFakeTimers())
 afterEach(() => { for (const session of allSessions.splice(0)) session.destroy(); vi.useRealTimers() })
 
 describe('desktop phone control session', () => {
+  it.each([1799, 1800, 1801])('budgets the complete UTF-8 heartbeat at %i bytes without changing host status', async budgetedBytes => {
+    const h = setup({
+      trace: { controlFrame: vi.fn() },
+      getCameraTuning: () => ({ ...DEFAULT_PHONE_CAMERA_TUNING, send: 'batch' }),
+    })
+    const orbs = Object.freeze({ fps: 60, turnsPerSecond: 2, pixelRatio: 2, renderer: 'webgpu' as const })
+    h.state.engine = Object.freeze({ phase: 'RUNNING', kind: 'piston', state: 'running', rpm: 1234,
+      blocked: '360 capture requires WebGPU.', orbs })
+    h.state.drone = { available: true, droneId: 'dji-mini-2', yawAngleDeg: 90, gimbalPitchDeg: -45,
+      gimbalRollDeg: 0, isSettled: false, isCapturing: true, capturePhase: 'settling-zero-velocity',
+      nodeIndex: 2, nodeCount: 22, flowConfidence: .5, flowSource: 'visual', omegaVisualRadPerSec: .01 }
+    // Additive presentation data also counts in the protocol's encoded byte budget.
+    const source = Object.assign(h.state, { futureTelemetry: '' })
+    const transport = await h.pair()
+    h.grant(transport)
+    h.session.setHapticFeedback(30)
+    await h.advance(50)
+    const baseline = transport.last('heartbeat')
+    expect(baseline).toMatchObject({ trace: 1, controlSend: 'batch', feedback: { pulseMs: 30 },
+      status: { engine: { orbs }, drone: h.state.drone } })
+    const remaining = budgetedBytes - new TextEncoder().encode(JSON.stringify(baseline)).byteLength
+    expect(remaining).toBeGreaterThan(0)
+    source.futureTelemetry = 'é'.repeat(Math.floor(remaining / 2)) + 'x'.repeat(remaining % 2)
+    const before = structuredClone(source)
+    await h.advance(50)
+    h.session.setHapticFeedback(30)
+    await h.advance(50)
+    const heartbeat = transport.last('heartbeat')
+    // Reconstructing the full optional presentation field establishes the exact boundary,
+    // including the envelope, trace, send timing and pending haptic feedback.
+    const full = { ...heartbeat, status: { ...heartbeat.status, engine: h.state.engine } }
+    const fullJson = JSON.stringify(full)
+    expect(new TextEncoder().encode(fullJson).byteLength).toBe(budgetedBytes)
+    expect(fullJson.length).toBeLessThan(1800)
+    if (budgetedBytes > 1800) {
+      expect(heartbeat.status!.engine).not.toHaveProperty('orbs')
+      expect(heartbeat.status!.engine).toEqual({ phase: 'RUNNING', kind: 'piston', state: 'running',
+        rpm: 1234, blocked: '360 capture requires WebGPU.' })
+      expect(new TextEncoder().encode(JSON.stringify(heartbeat)).byteLength).toBeLessThan(1800)
+    } else expect(heartbeat.status!.engine!.orbs).toEqual(orbs)
+    expect(heartbeat.status!.drone).toEqual(h.state.drone)
+    expect(heartbeat).toMatchObject({ trace: 1, controlSend: 'batch', feedback: { pulseMs: 30 } })
+    expect(parseMessage(heartbeat)).toEqual(heartbeat)
+    expect(source).toEqual(before)
+    expect(source.engine!.orbs).toBe(orbs)
+    expect(MAX_MESSAGE_BYTES).toBe(2048)
+  })
+
   it('draws the phone camera through the A/B settings, read live', async () => {
     const tuning = { ...DEFAULT_PHONE_CAMERA_TUNING, send: 'timer' as const, source: 'delta' as const, present: 'arrival' as const }
     const h = setup({ getCameraTuning: () => tuning })

@@ -35,16 +35,21 @@ const within = (min: number, max: number) => () => ({ min, max });
 export const REMOTE_CONTROL_PARAMETERS = [
   {
     id: "osfs.camera.chaseFrame",
-    label: "Chase camera turns with",
-    description: "Which of the aircraft's rotations every chase view follows.",
+    label: "Camera follows",
+    description: "Aircraft follows body rotation. Momentum follows the direction of travel with no roll and holds its last course at hover. Planet keeps a level, north-oriented frame.",
     unit: "none",
     kind: "choice",
     choices: [
-      { id: "attitude", label: "Roll, pitch and heading" },
-      { id: "no-roll", label: "Pitch and heading", description: "Wings level." },
-      { id: "heading", label: "Heading only", description: "Horizon level." },
+      { id: "aircraft", label: "Aircraft" },
+      { id: "momentum", label: "Momentum" },
+      { id: "planet", label: "Planet" },
     ],
-    default: "attitude",
+    legacyValues: [
+      { value: "attitude", replacement: "aircraft" },
+      { value: "no-roll", replacement: "momentum" },
+      { value: "heading", replacement: "momentum" },
+    ],
+    default: "aircraft",
     defaultReason: "The original chase camera, which rides on the aircraft.",
     home: main(CAMERA),
     appliesLive: true,
