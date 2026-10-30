@@ -25,9 +25,4 @@ export interface PhoneAttitudeRenderer {
 export type LoadPhoneAttitude = () => Promise<PhoneAttitudeRenderer>
 
 /** The flight HUD's stick response and its inverse: what a stick at rest shows for the controls it has. */
-export function stickResponse(value: number): number {
-  return Math.abs(value) <= .035 ? 0 : Math.sign(value) * (Math.abs(value) - .035) / .965
-}
-export function inverseStickResponse(value: number): number {
-  return value === 0 ? 0 : Math.sign(value) * (Math.abs(value) * .965 + .035)
-}
+export { stickResponse, inverseStickResponse } from '@0sfs/controls/centeredStick'

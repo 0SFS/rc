@@ -694,3 +694,40 @@ button:focus-visible, input:focus-visible, summary:focus-visible {
   .phone-cluster__pad { min-width: 140px; }
   .phone-log__line { grid-template-columns: 4em 5.2em minmax(0, auto); }
 }
+
+/* Each device keeps independent plane and drone side choices. */
+@media (orientation: landscape) {
+  .phone-controls[data-attitude-side="right"] > .phone-cluster { grid-column: 2; }
+  .phone-controls[data-attitude-side="right"] > .phone-yaw-throttle { grid-column: 1; }
+}
+.phone-settings__layout { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 6px 0; }
+.phone-settings__layout .phone-settings__choices { display: inline-flex; gap: 0; padding: 2px; border: 1px solid var(--ctl-line); border-radius: 999px; }
+.phone-settings__layout button { border: 0; border-radius: 999px; background: transparent; color: var(--ctl-muted); min-height: 34px; padding: 4px 14px; }
+.phone-settings__layout button[aria-pressed="true"] { background: rgba(232, 182, 71, .18); color: var(--ctl-accent); }
+
+.phone-controls--drone { grid-template-columns: minmax(0, 1fr); grid-template-rows: minmax(0, 1fr) max-content; }
+.phone-controls--drone > .phone-actions { grid-column: 1; grid-row: 2; }
+.phone-controls--drone.phone-controls--grid-top { grid-template-rows: max-content minmax(0, 1fr); }
+.phone-controls--drone.phone-controls--grid-top > .phone-actions { grid-row: 1; }
+.phone-controls--drone.phone-controls--grid-top > .phone-drone-controls { grid-row: 2; }
+.phone-drone-controls { display: grid; grid-row: 1; grid-column: 1; grid-template-rows: minmax(0, 1fr) max-content; gap: 8px; min-height: 0; }
+.phone-drone__sticks { display: flex; align-items: center; justify-content: space-between; gap: 8px; container-type: size; min-height: 0; }
+.phone-drone__sticks > .phone-stick { width: min(calc((100cqw - 8px) / 2), 100cqh); height: min(calc((100cqw - 8px) / 2), 100cqh); min-height: 0; flex: none; }
+.phone-drone__sticks[data-attitude-side="left"] > .phone-stick--drone-attitude { order: -1; }
+.phone-drone__extras, .phone-drone__actions { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
+.phone-drone__gimbal { display: inline-flex; align-items: center; gap: 6px; font-size: 10px; }
+.phone-drone__gimbal .flight-control-position { width: 100px; }
+.phone-drone__actions { font-size: 10px; }
+.phone-drone__actions button { padding: 5px 8px; border: 1px solid var(--ctl-line); border-radius: 8px; background: transparent; color: var(--phone-text); }
+.phone-drone__actions button[aria-pressed="true"] { color: var(--ctl-accent); border-color: var(--ctl-accent); }
+.phone-drone__actions button:disabled { opacity: .4; }
+.phone-stick--motors { container-type: inline-size; }
+.phone-stick__motors { position: absolute; inset: 28px 14px 24px; display: grid; place-items: center; }
+.phone-stick__motors, .phone-stick__motors * { pointer-events: none; }
+.phone-stick__motors .flight-quad-engine { display: block; }
+.phone-stick__motors .flight-quad-engine__summary { border: 0; padding: 0; background: transparent; }
+.phone-stick__motors .flight-quad-engine__grid { --quad-motor-size: clamp(26px, 28cqw, 70px); gap: 6px 18px; }
+.phone-stick--motors .phone-stick__knob { z-index: 1; }
+.phone-stick--motors .phone-stick__top { top: 8px; }
+.phone-stick--motors .phone-stick__label { top: auto; bottom: 7px; left: 6px; font-size: 8px; }
+.phone-stick--motors .phone-stick__bottom { left: auto; right: 6px; transform: none; font-size: 8px; }

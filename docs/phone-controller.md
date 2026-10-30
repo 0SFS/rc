@@ -224,7 +224,11 @@ mobile data.
 
 ## The screen itself
 
-The chase frame is selected on the computer in Aircraft → Camera → **Camera follows**: Aircraft follows body attitude; Momentum follows travel heading and climb/descent angle without roll and stays steady at hover; Planet remains level and north-oriented. Aircraft data selects the default, with planes using Aircraft and quadcopters using Momentum. Phone swipes and pinches keep working in all three modes.
+Drone controls default to Mode 2: the left engines instrument commands climb/descent and yaw, and the right attitude indicator commands pitch/roll. Both pads spring to center when released. Four motor RPM readings use the desktop's shared renderer and display budgets; absent readings remain unavailable. Mini 2 and Air 2S omit gear, flaps and trims; other airframes can declare supported controls individually. Connection, pause and Settings remain in the common chip grid.
+
+Settings → **Control sides on this phone** saves separate plane and drone pitch/roll sides. Planes default left and drones right. These two choices stay on this phone and do not change the main flight screen's Interface → Flight instruments side preferences. Changing sides releases held sticks before moving them.
+
+The chase frame is selected on the computer in Aircraft → Camera → **Camera follows**: Aircraft follows body attitude; Momentum follows travel heading and climb/descent angle without roll and turns with the aircraft at hover; Planet remains level and north-oriented. Aircraft data selects the default, with planes using Aircraft and quadcopters using Momentum. Phone swipes and pinches keep working in all three modes.
 
 The phone flies the aircraft, moves the chase camera from a trackpad — swipe to look, pinch to zoom —
 and shows the desktop HUD's own engine widget, drawn by the same code from the same reading, just

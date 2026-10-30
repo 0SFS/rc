@@ -1,9 +1,23 @@
 import type { EngineReading } from "@0sfs/engines/engineMonitor";
 import type { EngineControlReading } from "@0sfs/engines/engineControl";
-import type { EngineStatus } from "./protocol";
+import type { QuadEngineReading } from "@0sfs/engines/quadEngineMonitor";
+import type { DroneMotorStatus, EngineOrbSettings, EngineStatus } from "./protocol";
 
 /** JSBSim publishes mass flow per second; both HUD and phone read it per hour. */
 const SECONDS_PER_HOUR = 3600;
+
+/** Round only for transport; the controller and local instruments retain full precision. */
+export function toDroneMotorStatus(reading: QuadEngineReading | null, orbs: EngineOrbSettings): DroneMotorStatus | undefined {
+  if (!reading) return undefined;
+  return {
+    ...reading,
+    hoverRpm: Math.round(reading.hoverRpm),
+    maxRpm: Math.round(reading.maxRpm),
+    simTimeS: Math.round(reading.simTimeS * 1e4) / 1e4,
+    motors: reading.motors.map(motor => ({ ...motor, rpm: Math.round(motor.rpm) })),
+    orbs,
+  };
+}
 
 /**
  * The HUD's engine widget, reduced to what a status frame carries: the phase

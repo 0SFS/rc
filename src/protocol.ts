@@ -2,8 +2,10 @@ import type { ControlSurfaceState } from "@0sfs/controls/flightInputManager";
 import type { EngineRunState } from "@0sfs/engines/engineControl";
 import type { EngineRotorBladeCounts } from "@0sfs/engines/engineRotorDefinitions";
 import type { EngineOrbSettings } from "@0sfs/engines/engineOrbSettings";
+import type { QuadEngineReading } from "@0sfs/engines/quadEngineMonitor";
+import type { ControlCapabilities } from "@0sfs/aircraft/aircraftCatalog";
 
-export type { ControlSurfaceState, EngineOrbSettings, EngineRunState };
+export type { ControlCapabilities, ControlSurfaceState, EngineOrbSettings, EngineRunState };
 export const PROTOCOL_VERSION = 1;
 export const PROTOCOL_MISMATCH_MESSAGE = "Unsupported phone protocol. Reload both devices.";
 export const MAX_MESSAGE_BYTES = 2048;
@@ -74,6 +76,8 @@ export interface AircraftStatus {
   controls: ControlSurfaceState;
   /** Presentation only; separate from the controls used by handoff and input ownership. */
   actualControls?: ActualControlPositions;
+  /** Airframe capabilities; absent on older hosts, which keep their original UI. */
+  controlCapabilities?: ControlCapabilities;
   airspeedKts: number;
   altitudeFt: number;
   headingDeg: number;
@@ -122,8 +126,15 @@ export interface AircraftStatus {
   blend?: "phone" | "computer";
   /** Present only while the computer is flying an installed quadcopter. */
   drone?: DroneAvailability | DroneTelemetry;
+  /** Independent of camera telemetry so malformed camera data cannot hide motor readings. */
+  droneMotors?: DroneMotorStatus;
 }
 export type HandBack = "now" | "idle";
+
+/** Four simulated motor readings, with the same animation budget as the computer. */
+export interface DroneMotorStatus extends QuadEngineReading {
+  orbs?: EngineOrbSettings;
+}
 
 export interface DroneAvailability { available: true }
 
@@ -131,7 +142,7 @@ export type DroneCapturePhase = "idle" | "slewing" | "optical-flow-fine-align" |
 
 export interface DroneTelemetry {
   available: true;
-  droneId: "dji-mini-2" | "dji-air-2s";
+  droneId: "dji-mini2" | "dji-air2s";
   yawAngleDeg: number;
   gimbalPitchDeg: number;
   gimbalRollDeg: number;
@@ -146,7 +157,7 @@ export interface DroneTelemetry {
 }
 
 export interface DroneCommand {
-  droneId: "dji-mini-2" | "dji-air-2s";
+  droneId: "dji-mini2" | "dji-air2s";
   pitch: number;
   roll: number;
   vertical: number;
@@ -167,11 +178,27 @@ function inRange(value: unknown, min: number, max: number): value is number {
 }
 
 function isDroneId(value: unknown): value is DroneTelemetry["droneId"] {
-  return value === "dji-mini-2" || value === "dji-air-2s";
+  return value === "dji-mini2" || value === "dji-air2s";
 }
 
 function isDroneAvailability(value: unknown): value is DroneAvailability {
   return record(value) && value.available === true && Object.keys(value).length === 1;
+}
+
+function isControlCapabilities(value: unknown): value is ControlCapabilities {
+  return record(value) && ["flaps", "pitchTrim", "rollTrim", "landingGear"].every(key => typeof value[key] === "boolean");
+}
+
+function isDroneMotorStatus(value: unknown): value is DroneMotorStatus {
+  if (!record(value) || typeof value.aircraftId !== "string" || !value.aircraftId.trim() || value.aircraftId.length > 96
+    || typeof value.label !== "string" || !value.label.trim() || value.label.length > 96
+    || value.source !== "simulated" || !finite(value.hoverRpm) || value.hoverRpm <= 0
+    || !finite(value.maxRpm) || value.maxRpm <= 0 || !finite(value.simTimeS) || value.simTimeS < 0
+    || !Array.isArray(value.motors) || value.motors.length !== 4
+    || (value.orbs !== undefined && !isEngineOrbSettings(value.orbs))) return false;
+  const positions = new Set(["front-left", "front-right", "rear-left", "rear-right"]);
+  return value.motors.every(motor => record(motor) && positions.delete(motor.position as string)
+    && finite(motor.rpm) && motor.rpm >= 0 && (motor.direction === 1 || motor.direction === -1));
 }
 
 function isDroneTelemetry(value: unknown): value is DroneTelemetry {
@@ -571,6 +598,14 @@ export function isHapticFeedback(value: unknown): value is HapticFeedbackFrame {
     && Number.isInteger(value.pulseMs) && (value.pulseMs as number) >= 0 && (value.pulseMs as number) <= MAX_HAPTIC_PULSE_MS
     && Number.isInteger(value.ttlMs) && (value.ttlMs as number) > 0 && (value.ttlMs as number) <= HAPTIC_FEEDBACK_TTL_MS;
 }
+function isEngineOrbSettings(value: unknown): value is EngineOrbSettings {
+  return record(value) && finite(value.fps) && value.fps >= 0 && value.fps <= 1000
+    && finite(value.turnsPerSecond) && value.turnsPerSecond >= 0 && value.turnsPerSecond <= 4
+    && (value.maxPatternStep === undefined || (finite(value.maxPatternStep) && value.maxPatternStep >= 0.05 && value.maxPatternStep <= 0.49))
+    && finite(value.pixelRatio) && value.pixelRatio >= 1 && value.pixelRatio <= 3
+    && ["auto", "webgpu", "webgl2", "webgl1", "off"].includes(value.renderer as string);
+}
+
 export function isEngineStatus(value: unknown): value is EngineStatus {
   if (!record(value)) return false;
   // A label, not free text: bounded and printable, because the phone renders it.
@@ -588,15 +623,7 @@ export function isEngineStatus(value: unknown): value is EngineStatus {
   }
   if (value.simTimeS !== undefined && !(finite(value.simTimeS) && value.simTimeS >= 0)) return false;
   if (!["maxN1", "maxN2", "maxRpm"].every(key => value[key] === undefined || (finite(value[key]) && value[key] > 0))) return false;
-  if (value.orbs !== undefined) {
-    if (!record(value.orbs)) return false;
-    const orbs = value.orbs;
-    if (!(finite(orbs.fps) && orbs.fps >= 0 && orbs.fps <= 1000
-      && finite(orbs.turnsPerSecond) && orbs.turnsPerSecond >= 0 && orbs.turnsPerSecond <= 4
-      && (orbs.maxPatternStep === undefined || (finite(orbs.maxPatternStep) && orbs.maxPatternStep >= 0.05 && orbs.maxPatternStep <= 0.49))
-      && finite(orbs.pixelRatio) && orbs.pixelRatio >= 1 && orbs.pixelRatio <= 3
-      && ["auto", "webgpu", "webgl2", "webgl1", "off"].includes(orbs.renderer as string))) return false;
-  }
+  if (value.orbs !== undefined && !isEngineOrbSettings(value.orbs)) return false;
   if (value.start !== undefined && !(finite(value.start) && value.start >= 0 && value.start <= 1)) return false;
   // Shown on the phone as it comes: a short sentence, never markup.
   if (value.blocked !== undefined && !(typeof value.blocked === "string" && /^[A-Za-z0-9 ,.'-]{1,60}$/.test(value.blocked))) return false;
@@ -616,6 +643,8 @@ function status(value: unknown): value is AircraftStatus {
     && (value.afterburnerDetent === undefined || (finite(value.afterburnerDetent) && value.afterburnerDetent >= 0 && value.afterburnerDetent <= 1))
     && (value.engine === undefined || isEngineStatus(value.engine));
   if (valid && value.drone !== undefined && !isDroneAvailability(value.drone) && !isDroneTelemetry(value.drone)) delete value.drone;
+  if (valid && value.droneMotors !== undefined && !isDroneMotorStatus(value.droneMotors)) delete value.droneMotors;
+  if (valid && value.controlCapabilities !== undefined && !isControlCapabilities(value.controlCapabilities)) delete value.controlCapabilities;
   // An offer, never authority: a malformed one is dropped on its own, and the
   // phone then simply waits to be asked, as it would from an older computer.
   if (valid && value.handBack !== undefined && value.handBack !== "now" && value.handBack !== "idle") delete value.handBack;

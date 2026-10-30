@@ -129,6 +129,20 @@ async function setup(clientOptions: Partial<Parameters<typeof createPhoneControl
 }
 
 describe('phone controller', () => {
+  it('clears drone axes centrally while retaining gimbal and capture choices', async () => {
+    const h = await setup()
+    await advance(50)
+    await h.fly()
+    h.client.setDrone({ droneId: 'dji-mini2', pitch: .7, roll: -.4, yaw: .5, vertical: .3,
+      yawMode: 'angularVelocity', gimbalPitchDeg: -30, sport: true, capture360: true })
+    await advance(100)
+    expect(h.phoneLink.last('controls').drone).toMatchObject({ pitch: .7, vertical: .3 })
+    h.client.cancelTransientControls()
+    await advance(100)
+    expect(h.phoneLink.last('controls').drone).toMatchObject({ pitch: 0, roll: 0, yaw: 0, vertical: 0,
+      droneId: 'dji-mini2', gimbalPitchDeg: -30, sport: true, capture360: true })
+  })
+
   it('keeps the throttle lever brake applied and max-mixes the separate hold button', async () => {
     const h = await setup()
     h.state.throttleBrakeRange = true

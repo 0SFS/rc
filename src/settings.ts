@@ -36,11 +36,12 @@ export const REMOTE_CONTROL_PARAMETERS = [
   {
     id: "osfs.camera.chaseFrame",
     label: "Camera follows",
-    description: "Aircraft follows body rotation. Momentum follows the direction of travel with no roll and holds its last course at hover. Planet keeps a level, north-oriented frame.",
+    description: "Aircraft follows body rotation. Yaw follows aircraft heading with a smooth spring and a level horizon. Momentum follows the direction of travel with no roll and turns with the aircraft at hover. Planet keeps a level, north-oriented frame.",
     unit: "none",
     kind: "choice",
     choices: [
       { id: "aircraft", label: "Aircraft" },
+      { id: "yaw", label: "Yaw" },
       { id: "momentum", label: "Momentum" },
       { id: "planet", label: "Planet" },
     ],

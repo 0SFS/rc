@@ -38,8 +38,8 @@ export interface PhoneCameraTuning {
   catchUp: number;
   /** Playout only: how far past the newest touch to extrapolate. 0 never guesses. */
   predictMs: number;
-  /** Chase frame: body rotation, direction of travel, or the local planet frame. */
-  chaseFrame: "aircraft" | "momentum" | "planet";
+  /** Chase frame: body rotation, sprung aircraft heading, direction of travel, or the local planet frame. */
+  chaseFrame: "aircraft" | "yaw" | "momentum" | "planet";
 }
 
 /** The osfs.camera.* parameters the tuning is kept in, by field. */
@@ -97,7 +97,7 @@ function within(field: "bufferMs" | "catchUp" | "predictMs", value: unknown): nu
 export function normalizeCameraFollow(value: unknown): PhoneCameraTuning["chaseFrame"] {
   if (value === "attitude") return "aircraft";
   if (value === "no-roll" || value === "heading") return "momentum";
-  return oneOf(value, ["aircraft", "momentum", "planet"] as const, "aircraft");
+  return oneOf(value, ["aircraft", "yaw", "momentum", "planet"] as const, "aircraft");
 }
 
 export function normalizePhoneCameraTuning(partial: Partial<PhoneCameraTuning> | null | undefined): PhoneCameraTuning {

@@ -44,6 +44,7 @@ const setStarterHeld = vi.fn()
 const shutdownEngine = vi.fn(() => true)
 const setAutoFlaps = vi.fn(() => true)
 const setAutoTrim = vi.fn(() => true)
+const setDrone = vi.fn()
 
 function mount({ engine, status, snapshot, onPair, loadAttitude, attitude = null }: {
   engine?: EngineStatus
@@ -70,7 +71,7 @@ function mount({ engine, status, snapshot, onPair, loadAttitude, attitude = null
     updateControls, updatePower, nudgeCamera, setCameraFingers, cancelTransientControls: vi.fn(), requestControl,
     setPaused, setViewMode, setGearDown: () => true, setAutoFlaps, setAutoTrim, setStarterHeld, shutdownEngine, releaseControl: () => true, setPriority: () => true,
     setHapticsEnabled, updateSettings, destroy: vi.fn(),
-    getAttitude: () => attitude, subscribeAttitude: () => () => {},
+    getAttitude: () => attitude, subscribeAttitude: () => () => {}, setDrone,
   }
   act(() => root.render(<PhoneController client={client} onPair={onPair} loadAttitude={loadAttitude} />))
 }
@@ -123,6 +124,7 @@ beforeEach(() => {
   shutdownEngine.mockClear()
   setAutoFlaps.mockClear()
   setAutoTrim.mockClear()
+  setDrone.mockClear()
   vi.spyOn(HTMLElement.prototype, 'getBoundingClientRect').mockReturnValue(
     { x: 0, y: 0, left: 0, top: 0, right: 200, bottom: 200, width: 200, height: 200, toJSON: () => ({}) })
   Object.defineProperties(HTMLElement.prototype, {
@@ -135,6 +137,55 @@ beforeEach(() => {
   root = createRoot(container)
 })
 afterEach(() => { act(() => root.unmount()); container.remove(); vi.restoreAllMocks(); vi.unstubAllGlobals() })
+
+describe('drone instrument controls', () => {
+  it('embeds both instruments, keeps settings reachable, swaps only this phone and centers both sticks', async () => {
+    const draw = vi.fn()
+    const attitude: PhoneAttitude = { rollRad: 0, pitchRad: 0, headingRad: 0, northVelocityFps: 0, eastVelocityFps: 0, verticalSpeedFps: 0, aileron: 0, elevator: 0 }
+    mount({ status: { drone: { available: true }, droneMotors: {
+      aircraftId: 'dji-mini2', label: 'Mini 2', hoverRpm: 10000, maxRpm: 16000, simTimeS: 1, source: 'simulated',
+      motors: [
+        { position: 'front-left', rpm: 10001, direction: 1 }, { position: 'front-right', rpm: 10002, direction: -1 },
+        { position: 'rear-left', rpm: 10003, direction: -1 }, { position: 'rear-right', rpm: 10004, direction: 1 },
+      ],
+    } }, attitude, loadAttitude: async () => ({ halfShare: 96 / 220, mount: () => ({ draw, destroy() {} }) }) })
+    await act(async () => { await vi.dynamicImportSettled() })
+    const motorPad = () => container.querySelector<HTMLElement>('.phone-stick--motors')!
+    const pitchPad = () => container.querySelector<HTMLElement>('.phone-stick--drone-attitude')!
+    expect(container.querySelector('.phone-drone__sticks')?.getAttribute('data-attitude-side')).toBe('right')
+    expect(container.querySelector('.phone-stick--drone-attitude.phone-stick--attitude')).not.toBeNull()
+    expect(motorPad().querySelectorAll('.flight-quad-engine__motor')).toHaveLength(4)
+    expect(motorPad().querySelector('button')).toBeNull()
+    expect(motorPad().textContent).toContain('10001')
+    expect(button('G')).toBeUndefined()
+    expect(container.querySelector('[aria-label="Pitch trim"]')).toBeNull()
+    expect(container.querySelector('details.phone-settings')).not.toBeNull()
+    pointer(motorPad(), 'pointerdown', { pointerId: 1, clientX: 200, clientY: 0 })
+    pointer(pitchPad(), 'pointerdown', { pointerId: 2, clientX: 200, clientY: 0 })
+    expect(setDrone.mock.lastCall?.[0]).toMatchObject({ yaw: 1, vertical: 1, roll: 1, pitch: 1 })
+    const choices = container.querySelector('[aria-label="Drone pitch/roll side"]')!
+    act(() => choices.querySelector<HTMLButtonElement>('button')!.click())
+    expect(container.querySelector('.phone-drone__sticks')?.getAttribute('data-attitude-side')).toBe('left')
+    expect(setDrone.mock.lastCall?.[0]).toMatchObject({ yaw: 0, vertical: 0, roll: 0, pitch: 0 })
+    expect(updateSettings).not.toHaveBeenCalled()
+    expect([...storage.values()]).toContain(JSON.stringify({ planeAttitudeSide: 'left', droneAttitudeSide: 'left' }))
+    pointer(motorPad(), 'pointerdown', { pointerId: 3, clientX: 200, clientY: 0 })
+    act(() => button('Air 2S')!.click())
+    expect(setDrone.mock.lastCall?.[0]).toMatchObject({ droneId: 'dji-air2s', yaw: 0, vertical: 0, roll: 0, pitch: 0 })
+    const fromHost = (droneId: 'dji-mini2' | 'dji-air2s') => act(() => {
+      state = { ...state, status: { ...state.status!, drone: { available: true, droneId, yawAngleDeg: 0,
+        gimbalPitchDeg: 0, gimbalRollDeg: 0, isSettled: true, isCapturing: false, capturePhase: 'idle',
+        nodeIndex: 0, nodeCount: 0, flowConfidence: 0, flowSource: 'imu', omegaVisualRadPerSec: 0 } } }
+      for (const listener of listeners) listener()
+    })
+    fromHost('dji-air2s')
+    expect(button('Air 2S')?.getAttribute('aria-pressed')).toBe('true')
+    pointer(motorPad(), 'pointerdown', { pointerId: 4, clientX: 200, clientY: 0 })
+    fromHost('dji-mini2')
+    expect(button('Mini 2')?.getAttribute('aria-pressed')).toBe('true')
+    expect(setDrone.mock.lastCall?.[0]).toMatchObject({ droneId: 'dji-mini2', yaw: 0, vertical: 0, roll: 0, pitch: 0 })
+  })
+})
 
 describe('phone controller screen', () => {
   it('shows physical travel without replacing or sending the phone command', () => {

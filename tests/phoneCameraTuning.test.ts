@@ -31,6 +31,20 @@ describe("phone camera tuning", () => {
     expect(migratePhoneCameraTuning("{not json")).toBeNull();
   });
 
+  it("keeps Yaw through normalization and the parameter record", () => {
+    const parameters = remoteControlParameterDefaults();
+    const tuning = normalizePhoneCameraTuning({ chaseFrame: "yaw" });
+    expect(tuning.chaseFrame).toBe("yaw");
+    parameters.setMany(phoneCameraTuningValues(tuning));
+    expect(readPhoneCameraTuning(parameters).chaseFrame).toBe("yaw");
+    expect(migratePhoneCameraTuning(JSON.stringify(tuning)))
+      .toMatchObject({ "osfs.camera.chaseFrame": "yaw" });
+  });
+
+  it.each(["momentum", "heading", "no-roll"])("preserves the saved %s choice as Momentum", chaseFrame => {
+    expect(normalizePhoneCameraTuning({ chaseFrame } as never).chaseFrame).toBe("momentum");
+  });
+
   it("names a combination so a trace can be split by it", () => {
     expect(describePhoneCameraTuning(ORIGINAL)).toBe("timer · delta · arrival · aircraft");
     expect(describePhoneCameraTuning({ ...RECOMMENDED, catchUp: 0, predictMs: 8 }))

@@ -427,6 +427,7 @@ export function createPhoneControllerClient(
     // Through `adoptControls`, so a rudder the screen is drawing goes back to
     // centre on the screen too, not just on the wire.
     adoptControls(controls)
+    if (droneCommand) droneCommand = { ...droneCommand, pitch: 0, roll: 0, yaw: 0, vertical: 0 }
     camera = { ...NEUTRAL_CAMERA_AIM }
     aimTotal = { ...aimSent }
     aimMovedAt = null

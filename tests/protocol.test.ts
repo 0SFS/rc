@@ -4,12 +4,24 @@ import {
   isControlTrace, isHapticFeedback, isProtocolVersionMismatch, neutralize, parseMessage, phoneAttitude,
   type AircraftStatus, type ControlSurfaceState, type RemoteMessage,
 } from "../src/protocol";
+import { toDroneMotorStatus } from "../src/engineStatus";
 
 const controls: ControlSurfaceState = {
   elevator: -0.3, aileron: 0.4, rudder: -0.5, throttle: 0.83, pitchTrim: 0.2, rollTrim: -0.1, flaps: 1 / 3, brake: 0,
 };
 const status: AircraftStatus = {
   owner: "local", paused: false, viewMode: "third", controls, airspeedKts: 110, altitudeFt: 4321, headingDeg: 231,
+};
+const droneMotors = {
+  aircraftId: "dji-mini2", label: "DJI Mini 2", hoverRpm: 12500, maxRpm: 24000, simTimeS: 123.4567,
+  source: "simulated" as const,
+  motors: [
+    { position: "front-left" as const, rpm: 12601, direction: 1 as const },
+    { position: "front-right" as const, rpm: 12599, direction: -1 as const },
+    { position: "rear-left" as const, rpm: 12605, direction: -1 as const },
+    { position: "rear-right" as const, rpm: 12604, direction: 1 as const },
+  ],
+  orbs: { fps: 1000, turnsPerSecond: 2, maxPatternStep: .45, pixelRatio: 2, renderer: "auto" as const },
 };
 const envelope = { v: 1 as const, session: "flight-session", epoch: 3 };
 const frame = { ...envelope, type: "controls" as const, seq: 123, lease: 4, controls };
@@ -486,6 +498,60 @@ describe("protocol version mismatch classification", () => {
       { v: 2, type: "hello", padding: "x".repeat(MAX_MESSAGE_BYTES) },
       { v: 2, type: "hello", padding: "😀".repeat(600) },
     ]) expect(isProtocolVersionMismatch(value)).toBe(false);
+  });
+});
+
+describe("drone motor and capability status extensions", () => {
+  const capabilities = { flaps: false, pitchTrim: false, rollTrim: false, landingGear: false };
+  const heartbeat = { v: 1, session: "s", epoch: 2, type: "heartbeat", lease: 9 };
+
+  it("accepts all four motor readings with or without animation settings", () => {
+    const full = { ...heartbeat, status: { ...status, controlCapabilities: capabilities, droneMotors } };
+    expect(parseMessage(full)).toEqual(full);
+    const older: Partial<typeof droneMotors> = { ...droneMotors };
+    delete older.orbs;
+    expect(parseMessage({ ...full, status: { ...full.status, droneMotors: older } })).toMatchObject({ status: { droneMotors: older } });
+  });
+
+  it("drops each malformed extension independently", () => {
+    const baseline = { ...heartbeat, status: { ...status, drone: { available: true } } };
+    for (const bad of [null, {}, { ...capabilities, landingGear: "false" }, { ...capabilities, flaps: undefined }]) {
+      expect(parseMessage({ ...baseline, status: { ...baseline.status, controlCapabilities: bad } })).toEqual(baseline);
+    }
+    for (const bad of [
+      null, { ...droneMotors, motors: droneMotors.motors.slice(1) }, { ...droneMotors, source: "measured" },
+      { ...droneMotors, simTimeS: -1 }, { ...droneMotors, maxRpm: 0 },
+      { ...droneMotors, motors: droneMotors.motors.map(motor => ({ ...motor, position: "front-left" })) },
+      { ...droneMotors, motors: droneMotors.motors.map(motor => ({ ...motor, rpm: -1 })) },
+      { ...droneMotors, motors: droneMotors.motors.map(motor => ({ ...motor, direction: 0 })) },
+      { ...droneMotors, orbs: { ...droneMotors.orbs, pixelRatio: 5 } },
+    ]) expect(parseMessage({ ...baseline, status: { ...baseline.status, droneMotors: bad } })).toEqual(baseline);
+    const motorOnly = { ...heartbeat, status: { ...status, droneMotors, controlCapabilities: capabilities } };
+    expect(parseMessage({ ...motorOnly, status: { ...motorOnly.status, drone: { available: false } } })).toEqual(motorOnly);
+  });
+
+  it("rounds motor transport readings and fits a full drone heartbeat inside 2 KiB", () => {
+    const reading = { ...droneMotors, hoverRpm: 12499.987654321, maxRpm: 23999.123456789,
+      simTimeS: 123.4567890123, motors: droneMotors.motors.map(motor => ({ ...motor, rpm: motor.rpm + .123456789 })) };
+    const rounded = toDroneMotorStatus(reading, droneMotors.orbs)!;
+    expect(rounded).toMatchObject({ hoverRpm: 12500, maxRpm: 23999, simTimeS: 123.4568 });
+    expect(rounded.motors.map(motor => motor.rpm)).toEqual(droneMotors.motors.map(motor => motor.rpm));
+    expect(toDroneMotorStatus(null, droneMotors.orbs)).toBeUndefined();
+    const full = {
+      ...heartbeat, session: "x".repeat(36), epoch: 123456, lease: 123456, appliedSeq: 123456, receiveToApplyMs: 12.3456789,
+      trace: 1, controlSend: "batch", feedback: { v: 1, id: 123456, pulseMs: 30, ttlMs: 90 },
+      status: {
+        ...status, owner: "phone", actualControls: { throttle: .5, flaps: 0, pitchTrim: 0, rollTrim: 0, rudder: .123456789012345 },
+        airspeedKts: 12.12345678901234, altitudeFt: 12345.12345678901, headingDeg: 123.1234567890123,
+        controlCapabilities: capabilities, droneMotors: rounded,
+        drone: { available: true, droneId: "dji-mini2", yawAngleDeg: 123.123456789, gimbalPitchDeg: -45.123456789,
+          gimbalRollDeg: .123456789, isSettled: false, isCapturing: true, capturePhase: "settling-zero-velocity",
+          nodeIndex: 21, nodeCount: 22, flowConfidence: .123456789, flowSource: "visual", omegaVisualRadPerSec: .123456789 },
+        blend: "computer", handBack: "idle", throttleBrakeRange: false, keepSliderBrakes: false,
+      },
+    };
+    expect(new TextEncoder().encode(JSON.stringify(full)).length).toBeLessThan(MAX_MESSAGE_BYTES);
+    expect(parseMessage(full)).toEqual(full);
   });
 });
 

@@ -1,6 +1,7 @@
 import { YAW_RETURN_MS_MAX, YAW_RETURN_MS_STEP, type GridPosition, type YawRelease, type YawSettings } from './phoneSettingsStore'
 import type { SliderPress } from './sliderPointer'
 import type { PhoneControllerSettings } from './protocol'
+import type { PhoneControlLayout } from './phoneControlLayout'
 
 type TwoFingers = PhoneControllerSettings['twoFingers']
 
@@ -10,7 +11,7 @@ type TwoFingers = PhoneControllerSettings['twoFingers']
  * with the controls for room.
  */
 export function PhoneSettings({
-  gridPosition, onGridPositionChange, yaw, onYawChange, attitude, onAttitudeChange, sliders, onSlidersChange, twoFingers, onTwoFingersChange,
+  gridPosition, onGridPositionChange, yaw, onYawChange, attitude, onAttitudeChange, sliders, onSlidersChange, twoFingers, onTwoFingersChange, controlLayout, onControlLayoutChange,
 }: {
   gridPosition: GridPosition
   onGridPositionChange(position: GridPosition): void
@@ -22,6 +23,8 @@ export function PhoneSettings({
   onSlidersChange(sliders: SliderPress): void
   twoFingers: TwoFingers
   onTwoFingersChange(twoFingers: TwoFingers): void
+  controlLayout?: PhoneControlLayout
+  onControlLayoutChange?(layout: PhoneControlLayout): void
 }) {
   const option = (position: GridPosition, label: string) => (
     <label className="phone-settings__choice">
@@ -63,6 +66,19 @@ export function PhoneSettings({
       <span className="phone-sheet__chip" aria-hidden="true">⚙</span>
       <span className="phone-sheet__title">Settings</span>
     </summary>
+    {controlLayout && <fieldset className="phone-settings__option">
+      <legend>Control sides on this phone</legend>
+      {(['plane', 'drone'] as const).map(kind => <div className="phone-settings__layout" key={kind}>
+        <span>{kind === 'plane' ? 'Planes' : 'Drones'} · pitch/roll</span>
+        <div className="phone-settings__choices" role="group" aria-label={`${kind === 'plane' ? 'Plane' : 'Drone'} pitch/roll side`}>
+          {(['left', 'right'] as const).map(side => <button type="button" key={side}
+            aria-pressed={controlLayout[`${kind}AttitudeSide`] === side}
+            onClick={() => onControlLayoutChange?.({ ...controlLayout, [`${kind}AttitudeSide`]: side })}>
+            {side === 'left' ? 'Left' : 'Right'}
+          </button>)}
+        </div>
+      </div>)}
+    </fieldset>}
     <fieldset className="phone-settings__option">
       <legend>Button grid</legend>
       <p>The instruments and buttons, above or below the flight controls.</p>

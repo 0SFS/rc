@@ -134,7 +134,7 @@ describe('desktop phone control session', () => {
     const orbs = Object.freeze({ fps: 60, turnsPerSecond: 2, pixelRatio: 2, renderer: 'webgpu' as const })
     h.state.engine = Object.freeze({ phase: 'RUNNING', kind: 'piston', state: 'running', rpm: 1234,
       blocked: '360 capture requires WebGPU.', orbs })
-    h.state.drone = { available: true, droneId: 'dji-mini-2', yawAngleDeg: 90, gimbalPitchDeg: -45,
+    h.state.drone = { available: true, droneId: 'dji-mini2', yawAngleDeg: 90, gimbalPitchDeg: -45,
       gimbalRollDeg: 0, isSettled: false, isCapturing: true, capturePhase: 'settling-zero-velocity',
       nodeIndex: 2, nodeCount: 22, flowConfidence: .5, flowSource: 'visual', omegaVisualRadPerSec: .01 }
     // Additive presentation data also counts in the protocol's encoded byte budget.

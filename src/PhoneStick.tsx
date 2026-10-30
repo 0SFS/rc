@@ -1,7 +1,8 @@
-import { useCallback, useEffect, useLayoutEffect, useRef, useSyncExternalStore, type KeyboardEvent, type PointerEvent } from 'react'
+import { useCallback, useEffect, useLayoutEffect, useRef, useSyncExternalStore, type ReactNode, type PointerEvent } from 'react'
 import type { InputTiming, PhoneControllerClient } from './phoneControllerClient'
 import type { PhoneControllerSettings } from './protocol'
-import { inverseStickResponse, stickResponse, type PhoneAttitudeInstrument, type PhoneAttitudeRenderer } from './phoneAttitudeInstrument'
+import { type PhoneAttitudeInstrument, type PhoneAttitudeRenderer } from './phoneAttitudeInstrument'
+import { mountCenteredStick, inverseStickResponse, stickResponse } from '@0sfs/controls/centeredStick'
 import { mountPhoneAttitudeReadings, type PhoneAttitudeReadings } from './phoneAttitudeReadings'
 
 /** The flight's attitude indicator for the pad, and where its attitude comes from. */
@@ -20,6 +21,10 @@ interface PhoneStickProps {
    */
   verticalLabels?: { up: string; down: string }
   instrument?: PhoneStickInstrument
+  children?: ReactNode
+  className?: string
+  square?: boolean
+  halfShare?: number
 }
 
 /** When the touch behind a change happened, for the opt-in camera trace. */
@@ -35,89 +40,41 @@ function timing(event: PointerEvent<HTMLElement>): InputTiming {
 const TRAVEL = .36
 
 /** One captured pointer per pad; separate pads can operate simultaneously. */
-export function PhoneStick({ label, horizontal = false, disabled, onChange, instrument, verticalLabels }: PhoneStickProps) {
+export function PhoneStick({ label, horizontal = false, disabled, onChange, instrument, verticalLabels, children, className = '', square = false, halfShare }: PhoneStickProps) {
   const surface = useRef<HTMLButtonElement>(null)
   const knob = useRef<HTMLSpanElement>(null)
-  const pointer = useRef<number | null>(null)
-  const keyboard = useRef(new Set<string>())
+  const binding = useRef<ReturnType<typeof mountCenteredStick> | null>(null)
+  const latest = useRef({ disabled, onChange })
   const { host: instrumentHost, readingsHost, shown: attitudeShown, setFinger } = useAttitudeInstrument(instrument)
-  const travelShare = attitudeShown && instrument ? instrument.renderer.halfShare : TRAVEL
-  const radiusOf = useCallback((rect: DOMRect) =>
-    Math.max(1, Math.min(rect.width, horizontal ? rect.width : rect.height) * travelShare), [horizontal, travelShare])
-  // The flight's pad lets each axis reach full deflection on its own; the plain one keeps to a circle.
-  const bound = useCallback((x: number, y: number) => {
-    if (attitudeShown) return { x: Math.max(-1, Math.min(1, x)), y: Math.max(-1, Math.min(1, y)) }
-    const magnitude = Math.hypot(x, y)
-    return magnitude > 1 ? { x: x / magnitude, y: y / magnitude } : { x, y }
-  }, [attitudeShown])
-  const setPosition = useCallback((x: number, y: number, radius?: number, input?: InputTiming) => {
-    // Pixels, not a percentage: a percentage in `translate` resolves against
-    // the knob's own 52px, so the ring crept a couple of centimetres while the
-    // aircraft went to full deflection.
-    const travel = radius ?? (surface.current ? radiusOf(surface.current.getBoundingClientRect()) : 0)
-    if (knob.current) knob.current.style.transform = `translate(${x * travel}px, ${y * travel}px)`
-    setFinger(x, y, pointer.current !== null || keyboard.current.size > 0)
-    if (input) onChange(stickResponse(x), horizontal ? 0 : stickResponse(y), input)
-    else onChange(stickResponse(x), horizontal ? 0 : stickResponse(y))
-  }, [horizontal, onChange, radiusOf, setFinger])
-  const cancel = useCallback(() => {
-    const id = pointer.current
-    pointer.current = null
-    keyboard.current.clear()
-    if (id !== null && surface.current?.hasPointerCapture?.(id)) surface.current.releasePointerCapture(id)
-    surface.current?.removeAttribute('data-active')
-    setPosition(0, 0)
-  }, [setPosition])
-  useEffect(() => { if (disabled) cancel() }, [disabled, cancel])
+  const travelShare = halfShare ?? (attitudeShown && instrument ? instrument.renderer.halfShare : TRAVEL)
+  useLayoutEffect(() => { latest.current = { disabled, onChange } })
   useEffect(() => {
-    const hide = () => { if (document.hidden) cancel() }
-    window.addEventListener('orientationchange', cancel)
-    window.addEventListener('resize', cancel)
-    window.addEventListener('blur', cancel)
-    document.addEventListener('visibilitychange', hide)
-    return () => {
-      cancel()
-      window.removeEventListener('orientationchange', cancel)
-      window.removeEventListener('resize', cancel)
-      window.removeEventListener('blur', cancel)
-      document.removeEventListener('visibilitychange', hide)
-    }
-  }, [cancel])
-  const move = (event: PointerEvent<HTMLButtonElement>) => {
-    if (pointer.current !== event.pointerId || disabled) return
-    event.preventDefault()
-    const rect = event.currentTarget.getBoundingClientRect()
-    const radius = radiusOf(rect)
-    const { x, y } = bound((event.clientX - rect.left - rect.width / 2) / radius,
-      horizontal ? 0 : (event.clientY - rect.top - rect.height / 2) / radius)
-    setPosition(x, y, radius, timing(event))
-  }
-  const key = (event: KeyboardEvent<HTMLButtonElement>, down: boolean) => {
-    if (!['ArrowLeft', 'ArrowRight', 'ArrowUp', 'ArrowDown'].includes(event.key) || disabled || pointer.current !== null) return
-    event.preventDefault()
-    if (down) keyboard.current.add(event.key)
-    else keyboard.current.delete(event.key)
-    const { x, y } = bound(Number(keyboard.current.has('ArrowRight')) - Number(keyboard.current.has('ArrowLeft')),
-      horizontal ? 0 : Number(keyboard.current.has('ArrowDown')) - Number(keyboard.current.has('ArrowUp')))
-    setPosition(x, y)
-  }
+    const pad = surface.current!
+    const stick = mountCenteredStick(pad, {
+      halfShare: travelShare, horizontal,
+      square: () => square || attitudeShown,
+      disabled: () => latest.current.disabled,
+      onChange: (x, y, input) => {
+        if (input) latest.current.onChange(stickResponse(x), horizontal ? 0 : stickResponse(y), input)
+        else latest.current.onChange(stickResponse(x), horizontal ? 0 : stickResponse(y))
+      },
+      onPosition: (x, y, held) => {
+        const rect = pad.getBoundingClientRect()
+        const radius = Math.max(1, Math.min(rect.width, horizontal ? rect.width : rect.height) * travelShare)
+        if (knob.current) knob.current.style.transform = `translate(${x * radius}px, ${y * radius}px)`
+        setFinger(x, y, held)
+      },
+    })
+    binding.current = stick
+    return () => { stick.destroy(); binding.current = null }
+  }, [travelShare, horizontal, square, attitudeShown, setFinger])
+  useEffect(() => { if (disabled) binding.current?.release() }, [disabled])
   return <button ref={surface} type="button"
-    className={`phone-stick${horizontal ? ' phone-stick--rudder' : ''}${attitudeShown ? ' phone-stick--attitude' : ''}`}
-    aria-label={`${label}. Drag to steer; arrow keys also work.`} disabled={disabled}
-    onPointerDown={event => {
-      if (pointer.current !== null || disabled || event.button !== 0) return
-      pointer.current = event.pointerId
-      event.currentTarget.setPointerCapture(event.pointerId)
-      event.currentTarget.setAttribute('data-active', '')
-      move(event)
-    }} onPointerMove={move}
-    onPointerUp={event => { if (event.pointerId === pointer.current) cancel() }}
-    onPointerCancel={event => { if (event.pointerId === pointer.current) cancel() }}
-    onLostPointerCapture={event => { if (event.pointerId === pointer.current) cancel() }}
-    onKeyDown={event => key(event, true)} onKeyUp={event => key(event, false)} onBlur={cancel}
-    onContextMenu={event => event.preventDefault()}>
+    className={`phone-stick${horizontal ? ' phone-stick--rudder' : ''}${attitudeShown ? ' phone-stick--attitude' : ''}${className ? ` ${className}` : ''}`}
+    aria-label={`${label}. Drag to steer; arrow keys also work.`} disabled={disabled}>
     {instrument && <span className="phone-stick__instrument" ref={instrumentHost} aria-hidden="true" />}
     {instrument && <span className="phone-stick__readings flight-hud__attitude-readings" ref={readingsHost} aria-hidden="true" />}
+    {children}
     <span className="phone-stick__cross" aria-hidden="true" />
     <span className="phone-stick__knob" ref={knob} aria-hidden="true" />
     <span className="phone-stick__label">{label}</span>
