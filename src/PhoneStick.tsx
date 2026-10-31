@@ -200,7 +200,8 @@ export function PhoneBrake({ disabled, onChange }: { disabled: boolean; onChange
 const GESTURE_SCALE = 1000
 const KEY_STEP = 30 / GESTURE_SCALE
 interface CameraGesture { yaw: number; pitch: number; zoom?: number }
-interface PhoneCameraPadProps {
+export interface PhoneCameraPadProps {
+  background?: boolean
   disabled: boolean
   onGesture(gesture: CameraGesture, input?: InputTiming): void
   /**
@@ -215,7 +216,7 @@ interface PhoneCameraPadProps {
   twoFingers?: PhoneControllerSettings['twoFingers']
 }
 
-export function PhoneCameraPad({ disabled, onGesture, onFingers, twoFingers = 'both' }: PhoneCameraPadProps) {
+export function PhoneCameraPad({ disabled, onGesture, onFingers, twoFingers = 'both', background = false }: PhoneCameraPadProps) {
   const surface = useRef<HTMLButtonElement>(null)
   /** Every finger currently down, so a second one can start a pinch mid-swipe. */
   const points = useRef(new Map<number, { x: number; y: number }>())
@@ -283,7 +284,7 @@ export function PhoneCameraPad({ disabled, onGesture, onFingers, twoFingers = 'b
     if (points.current.size === 0) surface.current?.removeAttribute('data-active')
     onFingers?.(points.current.size, timing(event))
   }
-  return <button ref={surface} type="button" className="phone-camera" disabled={disabled}
+  return <button ref={surface} type="button" className={background ? "phone-camera phone-camera--background" : "phone-camera"} disabled={disabled}
     aria-label="Camera. Swipe to look around, pinch with two fingers to zoom; arrow keys also work."
     onPointerDown={event => {
       if (disabled || event.button !== 0 || points.current.size >= 2) return
@@ -306,7 +307,7 @@ export function PhoneCameraPad({ disabled, onGesture, onFingers, twoFingers = 'b
       onGesture(gesture)
     }}
     onBlur={release} onContextMenu={event => event.preventDefault()}>
-    <span className="phone-camera__label">CAMERA</span>
-    <span className="phone-camera__hint" aria-hidden="true">SWIPE TO LOOK · PINCH TO ZOOM</span>
+    {!background && <span className="phone-camera__label">CAMERA</span>}
+    {!background && <span className="phone-camera__hint" aria-hidden="true">SWIPE TO LOOK · PINCH TO ZOOM</span>}
   </button>
 }

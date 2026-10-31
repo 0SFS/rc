@@ -157,6 +157,21 @@ describe('drone instrument controls', () => {
     expect(motorPad().querySelectorAll('.flight-quad-engine__motor')).toHaveLength(4)
     expect(motorPad().querySelector('button')).toBeNull()
     expect(motorPad().textContent).toContain('10001')
+    const background = container.querySelector<HTMLElement>('.phone-camera--background')!
+    expect(background).not.toBeNull()
+    expect(container.querySelector('.phone-camera-slot')).toBeNull()
+    const sent = setDrone.mock.calls.length
+    pointer(background, 'pointerdown', { pointerId: 10, clientX: 50, clientY: 50 })
+    pointer(background, 'pointermove', { pointerId: 10, clientX: 90, clientY: 70 })
+    expect(nudgeCamera.mock.lastCall?.[0]).toEqual({ yaw: .04, pitch: .02 })
+    pointer(background, 'pointerdown', { pointerId: 11, clientX: 130, clientY: 70 })
+    pointer(background, 'pointermove', { pointerId: 11, clientX: 170, clientY: 70 })
+    expect(nudgeCamera.mock.lastCall?.[0]).toMatchObject({ zoom: 2 })
+    pointer(background, 'pointerup', { pointerId: 11 })
+    pointer(background, 'pointerup', { pointerId: 10 })
+    expect(setCameraFingers.mock.lastCall?.[0]).toBe(0)
+    expect(setDrone.mock.calls.length).toBe(sent)
+
     expect(button('G')).toBeUndefined()
     expect(container.querySelector('[aria-label="Pitch trim"]')).toBeNull()
     expect(container.querySelector('details.phone-settings')).not.toBeNull()

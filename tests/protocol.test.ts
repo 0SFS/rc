@@ -552,6 +552,12 @@ describe("drone motor and capability status extensions", () => {
     };
     expect(new TextEncoder().encode(JSON.stringify(full)).length).toBeLessThan(MAX_MESSAGE_BYTES);
     expect(parseMessage(full)).toEqual(full);
+    // Flight headings use 0..360. West must not erase the drone discriminator.
+    for (const yawAngleDeg of [-180, 0, 180, 271, 360]) {
+      const packet = { ...full, status: { ...full.status, drone: { ...full.status.drone, yawAngleDeg } } };
+      expect(parseMessage(packet)).toEqual(packet);
+    }
+
   });
 });
 

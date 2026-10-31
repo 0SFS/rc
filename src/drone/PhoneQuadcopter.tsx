@@ -1,9 +1,11 @@
 import { useEffect, useLayoutEffect, useRef, useState } from "react";
 import type { PhoneControllerClient } from "../phoneControllerClient";
 import { PhoneControlRange } from "../PhoneControlRange";
-import { PhoneStick, type PhoneStickInstrument } from "../PhoneStick";
+import { PhoneCameraPad, PhoneStick, type PhoneCameraPadProps, type PhoneStickInstrument } from "../PhoneStick";
 import type { DroneCommand, DroneTelemetry, DroneMotorStatus } from "../protocol";
 import type { SliderPress } from "../sliderPointer";
+
+import "../styles/droneFlightLayout.css";
 
 import { INSTRUMENT_STICK_HALF_SHARE } from "@0sfs/controls/centeredStick";
 import { createQuadEngineMonitor, type QuadEngineMonitor } from "@0sfs/engines/quadEngineMonitor";
@@ -14,8 +16,9 @@ const LIMITS: Record<DroneCommand["droneId"], number> = { "dji-mini2": 20, "dji-
  * Mode 2 quadcopter. Left stick climbs and yaws. Right stick translates.
  * Up on a stick is positive because PhoneStick's y is down-positive.
  */
-export default function PhoneQuadcopter({ client, locked, sliders, instrument, attitudeSide }: {
+export default function PhoneQuadcopter({ client, locked, sliders, instrument, attitudeSide, camera }: {
   client: PhoneControllerClient;
+  camera: Omit<PhoneCameraPadProps, "disabled" | "background">;
   locked: boolean;
   sliders: SliderPress;
   instrument?: PhoneStickInstrument;
@@ -59,11 +62,12 @@ export default function PhoneQuadcopter({ client, locked, sliders, instrument, a
     command(undefined, { droneId: id, gimbalPitchDeg: Math.min(gimbal, LIMITS[id]) });
   };
   return <section className="phone-drone-controls" aria-label="Quadcopter controls">
-    <div className="phone-drone__sticks" data-attitude-side={attitudeSide}>
-      <PhoneStick key={`motors-${attitudeSide}-${airframeRevision}`} className="phone-stick--motors" square halfShare={INSTRUMENT_STICK_HALF_SHARE} label="CLIMB / YAW" verticalLabels={{ up: "CLIMB", down: "DESCEND" }} disabled={locked} onChange={(x, y) => { sticks.current.yaw = x; sticks.current.vertical = y === 0 ? 0 : -y; command(); }}>
+    <PhoneCameraPad {...camera} disabled={locked} background />
+    <div className="phone-drone__sticks drone-flight-layout" data-attitude-side={attitudeSide}>
+      <PhoneStick key={`motors-${attitudeSide}-${airframeRevision}`} className="phone-stick--motors drone-flight-layout__motors" square halfShare={INSTRUMENT_STICK_HALF_SHARE} label="CLIMB / YAW" verticalLabels={{ up: "CLIMB", down: "DESCEND" }} disabled={locked} onChange={(x, y) => { sticks.current.yaw = x; sticks.current.vertical = y === 0 ? 0 : -y; command(); }}>
         <PhoneQuadMotors reading={aircraft?.droneMotors} paused={aircraft?.paused ?? true} />
       </PhoneStick>
-      <PhoneStick key={`attitude-${attitudeSide}-${airframeRevision}`} className="phone-stick--drone-attitude" square halfShare={INSTRUMENT_STICK_HALF_SHARE} label="PITCH / ROLL" instrument={instrument} verticalLabels={{ up: "FORWARD", down: "BACK" }} disabled={locked} onChange={(x, y) => { sticks.current.roll = x; sticks.current.pitch = y === 0 ? 0 : -y; command(); }} />
+      <PhoneStick key={`attitude-${attitudeSide}-${airframeRevision}`} className="phone-stick--drone-attitude drone-flight-layout__attitude" square halfShare={INSTRUMENT_STICK_HALF_SHARE} label="PITCH / ROLL" instrument={instrument} verticalLabels={{ up: "FORWARD", down: "BACK" }} disabled={locked} onChange={(x, y) => { sticks.current.roll = x; sticks.current.pitch = y === 0 ? 0 : -y; command(); }} />
     </div>
     <div className="phone-drone__extras">
     {(["flaps", "pitchTrim", "rollTrim"] as const).map(axis => aircraft?.controlCapabilities?.[axis] === true && <label className="phone-drone__gimbal" key={axis}>

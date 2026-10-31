@@ -111,6 +111,7 @@
       "source": "./src/settings.ts",
       "default": "./src/settings.ts"
     },
+    "./styles/droneFlightLayout.css": "./src/styles/droneFlightLayout.css",
     "./styles/flightControls.css": "./src/styles/flightControls.css",
     "./useFullscreenOffer": {
       "source": "./src/useFullscreenOffer.ts",

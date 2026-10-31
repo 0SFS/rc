@@ -143,6 +143,7 @@ export type DroneCapturePhase = "idle" | "slewing" | "optical-flow-fine-align" |
 export interface DroneTelemetry {
   available: true;
   droneId: "dji-mini2" | "dji-air2s";
+  /** Aircraft heading telemetry may use either -180..180 or 0..360. */
   yawAngleDeg: number;
   gimbalPitchDeg: number;
   gimbalRollDeg: number;
@@ -206,7 +207,7 @@ function isDroneTelemetry(value: unknown): value is DroneTelemetry {
   const keys = Object.keys(value);
   if (keys.length !== DRONE_TELEMETRY_KEYS.length || DRONE_TELEMETRY_KEYS.some(key => !keys.includes(key))) return false;
   return value.available === true && isDroneId(value.droneId)
-    && inRange(value.yawAngleDeg, -180, 180) && inRange(value.gimbalPitchDeg, -90, 24) && inRange(value.gimbalRollDeg, -180, 180)
+    && inRange(value.yawAngleDeg, -180, 360) && inRange(value.gimbalPitchDeg, -90, 24) && inRange(value.gimbalRollDeg, -180, 180)
     && typeof value.isSettled === "boolean" && typeof value.isCapturing === "boolean"
     && DRONE_PHASES.includes(value.capturePhase as DroneCapturePhase)
     && Number.isInteger(value.nodeIndex) && inRange(value.nodeIndex, 0, 256)

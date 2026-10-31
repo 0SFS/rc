@@ -2,7 +2,7 @@ import { useCallback, useEffect, useMemo, useState, useSyncExternalStore, type R
 import { loadQuadcopter } from "./drone/loadQuadcopter";
 import type { InputTiming, PhoneControllerClient } from "./phoneControllerClient";
 import type { LoadPhoneAttitude, PhoneAttitudeRenderer } from "./phoneAttitudeInstrument";
-import { PhoneBrake, PhoneCameraPad, PhoneStick, type PhoneStickInstrument } from "./PhoneStick";
+import { PhoneBrake, PhoneCameraPad, PhoneStick, type PhoneStickInstrument, type PhoneCameraPadProps } from "./PhoneStick";
 import { PhoneQrScanner } from "./PhoneQrScanner";
 import { PhoneEngine } from "./PhoneEngine";
 import { PhoneThrottle } from "./PhoneThrottle";
@@ -37,7 +37,7 @@ export function PhoneController({ client, onPair, loadAttitude }: {
 }) {
   const state = useSyncExternalStore(client.subscribe, client.getSnapshot);
   const [scanning, setScanning] = useState(false);
-  const [quad, setQuad] = useState<((props: { client: PhoneControllerClient; locked: boolean; sliders: SliderPress; instrument?: PhoneStickInstrument; attitudeSide: "left" | "right" }) => ReactElement) | null>(null);
+  const [quad, setQuad] = useState<((props: { client: PhoneControllerClient; locked: boolean; sliders: SliderPress; instrument?: PhoneStickInstrument; attitudeSide: "left" | "right"; camera: Omit<PhoneCameraPadProps, "disabled" | "background"> }) => ReactElement) | null>(null);
   const [controlLayout, setControlLayout] = useState(() => readPhoneControlLayout(typeof localStorage === "undefined" ? null : localStorage));
   const changeControlLayout = useCallback((next: PhoneControlLayout) => {
     client.cancelTransientControls();
@@ -129,7 +129,7 @@ export function PhoneController({ client, onPair, loadAttitude }: {
     <PhoneFullscreenPrompt offer={fullscreen} />
     {scanning && onPair && <PhoneQrScanner onScan={onPair} onClose={() => setScanning(false)} />}
     <section className={`phone-controls phone-controls--grid-${gridPosition}${isDrone ? ' phone-controls--drone' : ''}`} data-attitude-side={isDrone ? controlLayout.droneAttitudeSide : controlLayout.planeAttitudeSide} aria-label="Aircraft controls">
-      {isDrone ? (QuadControls ? <QuadControls key={status?.drone && "droneId" in status.drone ? status.drone.droneId : "pending"} client={client} locked={locked} sliders={sliders} instrument={instrument} attitudeSide={controlLayout.droneAttitudeSide} /> : <div role="status">Loading drone controls…</div>) : <>
+      {isDrone ? (QuadControls ? <QuadControls key={status?.drone && "droneId" in status.drone ? status.drone.droneId : "pending"} client={client} locked={locked} sliders={sliders} instrument={instrument} attitudeSide={controlLayout.droneAttitudeSide} camera={{ onGesture: camera, onFingers: cameraFingers, twoFingers }} /> : <div role="status">Loading drone controls…</div>) : <>
       <div className="phone-cluster" key={`plane-${controlLayout.planeAttitudeSide}`} aria-label="Attitude, trim and flaps">
         {(available("pitchTrim") || available("rollTrim")) && (autoTrim ? <div className="flight-hud__auto-trims" role="group" aria-label="Trim assists">
           {available("rollTrim") && autoTrimButton("roll")}

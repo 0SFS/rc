@@ -711,9 +711,17 @@ button:focus-visible, input:focus-visible, summary:focus-visible {
 .phone-controls--drone.phone-controls--grid-top > .phone-actions { grid-row: 1; }
 .phone-controls--drone.phone-controls--grid-top > .phone-drone-controls { grid-row: 2; }
 .phone-drone-controls { display: grid; grid-row: 1; grid-column: 1; grid-template-rows: minmax(0, 1fr) max-content; gap: 8px; min-height: 0; }
-.phone-drone__sticks { display: flex; align-items: center; justify-content: space-between; gap: 8px; container-type: size; min-height: 0; }
-.phone-drone__sticks > .phone-stick { width: min(calc((100cqw - 8px) / 2), 100cqh); height: min(calc((100cqw - 8px) / 2), 100cqh); min-height: 0; flex: none; }
-.phone-drone__sticks[data-attitude-side="left"] > .phone-stick--drone-attitude { order: -1; }
+.phone-drone__sticks { position: relative; min-height: 0; }
+.phone-drone__sticks > .phone-stick { height: var(--drone-pad-size); }
+.phone-controls--drone { position: relative; }
+.phone-drone-controls { pointer-events: none; }
+.phone-drone__extras, .phone-controls--drone > .phone-actions { position: relative; pointer-events: auto; }
+.phone-camera.phone-camera--background {
+  position: absolute; inset: 0; width: 100%; height: 100%;
+  border: 0; border-radius: 0; background: transparent;
+  pointer-events: auto; touch-action: none;
+}
+.phone-camera--background[data-active] { box-shadow: none; }
 .phone-drone__extras, .phone-drone__actions { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; }
 .phone-drone__gimbal { display: inline-flex; align-items: center; gap: 6px; font-size: 10px; }
 .phone-drone__gimbal .flight-control-position { width: 100px; }
@@ -721,13 +729,10 @@ button:focus-visible, input:focus-visible, summary:focus-visible {
 .phone-drone__actions button { padding: 5px 8px; border: 1px solid var(--ctl-line); border-radius: 8px; background: transparent; color: var(--phone-text); }
 .phone-drone__actions button[aria-pressed="true"] { color: var(--ctl-accent); border-color: var(--ctl-accent); }
 .phone-drone__actions button:disabled { opacity: .4; }
-.phone-stick--motors { container-type: inline-size; }
-.phone-stick__motors { position: absolute; inset: 28px 14px 24px; display: grid; place-items: center; }
+.phone-stick__motors { position: absolute; inset: 0; display: grid; place-items: center; }
 .phone-stick__motors, .phone-stick__motors * { pointer-events: none; }
 .phone-stick__motors .flight-quad-engine { display: block; }
-.phone-stick__motors .flight-quad-engine__summary { border: 0; padding: 0; background: transparent; }
-.phone-stick__motors .flight-quad-engine__grid { --quad-motor-size: clamp(26px, 28cqw, 70px); gap: 6px 18px; }
 .phone-stick--motors .phone-stick__knob { z-index: 1; }
-.phone-stick--motors .phone-stick__top { top: 8px; }
+.phone-stick--motors :is(.phone-stick__top, .phone-stick__bottom) { display: none; }
 .phone-stick--motors .phone-stick__label { top: auto; bottom: 7px; left: 6px; font-size: 8px; }
 .phone-stick--motors .phone-stick__bottom { left: auto; right: 6px; transform: none; font-size: 8px; }
