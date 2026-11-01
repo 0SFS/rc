@@ -1054,10 +1054,28 @@ describe('phone haptics', () => {
     expect(h.client.getSnapshot().hapticsEnabled).toBe(false)
   })
 
+  it('delivers paired-phone haptics by default and preserves a saved opt-out', async () => {
+    const vibrate = vi.fn(() => true)
+    const h = await setup({ vibrate, storage: storage() })
+    await advance(50)
+    await h.fly()
+    h.host.setHapticFeedback(40)
+    await advance(50)
+    expect(vibrate).toHaveBeenCalledWith(40)
+
+    const prefs = storage()
+    prefs.setItem('osfs.phone-haptics', 'off')
+    const muted = await setup({ vibrate: vi.fn(() => true), storage: prefs })
+    expect(muted.client.getSnapshot().hapticsEnabled).toBe(false)
+  })
+
   it('delivers only the latest pulse on the next heartbeat while the phone owns an unpaused flight', async () => {
     const vibrate = vi.fn(() => true)
     const prefs = storage()
     const h = await setup({ vibrate, storage: prefs })
+    expect(h.client.getSnapshot()).toMatchObject({ hapticsSupported: true, hapticsEnabled: true })
+    // An explicit opt-out still mutes supported devices.
+    h.client.setHapticsEnabled(false)
     await advance(50)
     h.host.setHapticFeedback(40)
     await advance(50)
@@ -1066,7 +1084,7 @@ describe('phone haptics', () => {
     await advance(50)
     h.host.setHapticFeedback(40)
     await advance(50)
-    expect(vibrate).not.toHaveBeenCalled() // Off by default.
+    expect(vibrate).not.toHaveBeenCalled() // Explicitly disabled.
     h.client.setHapticsEnabled(true)
     expect(prefs.map.get('osfs.phone-haptics')).toBe('on')
     h.host.setHapticFeedback(20)

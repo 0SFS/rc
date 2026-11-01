@@ -29,7 +29,7 @@ export interface YawSettings { release: YawRelease; returnMs: number }
  * values are the defaults there; a test keeps the two in step.
  */
 export const DEFAULT_PHONE_SETTINGS: Readonly<PhoneControllerSettings> = Object.freeze({
-  grid: 'bottom', yawRelease: 'center', yawReturnMs: 0, haptics: false, attitude: true, sliders: 'jump', twoFingers: 'both',
+  grid: 'bottom', yawRelease: 'center', yawReturnMs: 0, haptics: true, attitude: true, sliders: 'jump', twoFingers: 'both',
 })
 
 /** The keys predate the computer holding these, and are kept so a phone's choices carry over. */
@@ -55,7 +55,7 @@ export function loadPhoneSettings(storage: PhoneSettingsStorage | null): PhoneCo
       grid: storage.getItem(KEYS.grid) === 'top' ? 'top' : 'bottom',
       yawRelease: storage.getItem(KEYS.yawRelease) === 'hold' ? 'hold' : 'center',
       yawReturnMs: Number.isFinite(returnMs) ? Math.min(YAW_RETURN_MS_MAX, Math.max(0, Math.round(returnMs))) : 0,
-      haptics: storage.getItem(KEYS.haptics) === 'on',
+      haptics: storage.getItem(KEYS.haptics) !== 'off',
       attitude: storage.getItem(KEYS.attitude) !== 'off',
       sliders: storage.getItem(KEYS.sliders) === 'grab' ? 'grab' : 'jump',
       twoFingers: storage.getItem(KEYS.twoFingers) === 'zoom' ? 'zoom' : 'both',
