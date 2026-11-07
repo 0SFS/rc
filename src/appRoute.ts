@@ -1,4 +1,7 @@
-export type AppRoute = "info" | "flight" | "globe" | "remote";
+export type AppRoute = "info" | "flight" | "globe" | "remote" | "replay";
+
+/** The pages this app serves, each at `/<segment>/` under the base. */
+export type AppSegment = "fly" | "rc" | "replay";
 
 export const FOSS_EARTH_URL = "https://foss-earth.github.io/";
 
@@ -32,7 +35,7 @@ export function pathAfterBase(pathname: string, base = defaultBase()): string {
   return rest === "" ? "/" : rest;
 }
 
-export function isAppPath(pathname: string, segment: "fly" | "rc", base = defaultBase()): boolean {
+export function isAppPath(pathname: string, segment: AppSegment, base = defaultBase()): boolean {
   return pathAfterBase(pathname, base) === `/${segment}`;
 }
 
@@ -41,11 +44,12 @@ export function appRouteFrom(url: URL, base = defaultBase()): AppRoute {
   if (mode === "remote" || isAppPath(url.pathname, "rc", base)) return "remote";
   if (mode === "globe") return "globe";
   if (mode === "flight" || isAppPath(url.pathname, "fly", base)) return "flight";
+  if (isAppPath(url.pathname, "replay", base)) return "replay";
   return "info";
 }
 
-/** Same-origin path + search + hash for `/fly/` or `/rc/`, dropping `mode`. */
-export function appHref(segment: "fly" | "rc", from: URL, base = defaultBase()): string {
+/** Same-origin path + search + hash for `/fly/`, `/rc/` or `/replay/`, dropping `mode`. */
+export function appHref(segment: AppSegment, from: URL, base = defaultBase()): string {
   const url = new URL(`${segment}/`, new URL(base, from.origin));
   const params = new URLSearchParams(from.search);
   params.delete("mode");

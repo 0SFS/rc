@@ -43,6 +43,9 @@ describe("appRouteFrom", () => {
     ["https://0sfs.github.io/?mode=remote#v=1&peer=desktop&join=secret", "remote"],
     ["https://0sfs.github.io/fly/?mode=remote", "remote"],
     ["https://0sfs.github.io/?mode=globe", "globe"],
+    ["https://0sfs.github.io/replay", "replay"],
+    ["https://0sfs.github.io/replay/?timeline=N722BD-2026-11-01&t=6213", "replay"],
+    ["https://0sfs.github.io/replay/?mode=flight", "flight"],
   ] as const)("%s → %s", (href, route) => {
     expect(appRouteFrom(new URL(href))).toBe(route);
   });
@@ -55,6 +58,7 @@ describe("appRouteFrom", () => {
     expect(appRouteFrom(new URL("https://example.test/repo/"), "/repo/")).toBe("info");
     expect(appRouteFrom(new URL("https://example.test/repo/fly/"), "/repo/")).toBe("flight");
     expect(appRouteFrom(new URL("https://example.test/repo/rc/"), "/repo/")).toBe("remote");
+    expect(appRouteFrom(new URL("https://example.test/repo/replay/"), "/repo/")).toBe("replay");
   });
 });
 
@@ -83,6 +87,7 @@ describe("canonicalAppLocation", () => {
     );
     expect(canonicalAppLocation(new URL("https://0sfs.github.io/fly/"))).toBeNull();
     expect(canonicalAppLocation(new URL("https://0sfs.github.io/rc/"))).toBeNull();
+    expect(canonicalAppLocation(new URL("https://0sfs.github.io/replay/?timeline=x"))).toBeNull();
     expect(canonicalAppLocation(new URL("https://0sfs.github.io/"))).toBeNull();
   });
 
@@ -90,6 +95,7 @@ describe("canonicalAppLocation", () => {
     expect(isAppPath("/fly", "fly")).toBe(true);
     expect(isAppPath("/fly/", "fly")).toBe(true);
     expect(isAppPath("/rc", "rc")).toBe(true);
+    expect(isAppPath("/replay/", "replay")).toBe(true);
     expect(isAppPath("/", "fly")).toBe(false);
   });
 });
